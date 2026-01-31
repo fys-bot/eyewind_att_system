@@ -191,10 +191,10 @@ export const AttendanceRulesPage: React.FC = () => {
                 // 🔥 重要：同步到规则引擎，确保全局规则立即生效
                 try {
                     const { AttendanceRuleManager } = await import('../attendance/AttendanceRuleEngine.ts');
-                    const { refreshRuleConfigCache } = await import('../attendance/utils.ts');
+                    const { refreshDbRuleCache } = await import('../attendance/utils.ts');
                     
                     // 刷新规则配置缓存
-                    await refreshRuleConfigCache(selectedCompany);
+                    await refreshDbRuleCache(selectedCompany);
                     
                     // 重新加载规则引擎
                     AttendanceRuleManager.reloadAllRules();
