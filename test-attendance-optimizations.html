@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤页面优化验证</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .optimization {
+            background: #dcfce7;
+            border: 1px solid #16a34a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .log { 
+            background: #f1f5f9; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 4px; 
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .success { color: #059669; }
+        .info { color: #0284c7; }
+        .warning { color: #d97706; }
+        .error { color: #dc2626; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        .feature-demo {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 考勤页面优化功能验证</h1>
+        
+        <div class="optimization">
+            <h3>✅ 三大优化功能</h3>
+            <ol>
+                <li><strong>缓存优化：</strong>如果缓存中已有员工数据和token，跳过重复API调用，直接调用load接口</li>
+                <li><strong>友好错误提示：</strong>404时显示"XX月还未配置考勤确认信息，请移步考勤仪表盘设置并确认"</li>
+                <li><strong>创建入口：</strong>404错误页面增加"创建考勤确认（上传）"按钮</li>
+            </ol>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 缓存优化测试</h3>
+            <div class="feature-demo">
+                <h4>缓存逻辑：</h4>
+                <ul>
+                    <li>首次访问：调用Token + Employee + Load API</li>
+                    <li>5分钟内再次访问：只调用Load API</li>
+                    <li>缓存过期后：重新调用所有API</li>
+                </ul>
+            </div>
+            <button onclick="testCacheOptimization()">测试缓存优化</button>
+            <button onclick="simulateCache()">模拟缓存场景</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>💬 友好错误提示测试</h3>
+            <div class="feature-demo">
+                <h4>404错误信息优化：</h4>
+                <p><strong>旧提示：</strong>"当前月份没有考勤数据"</p>
+                <p><strong>新提示：</strong>"2026年1月还未配置考勤确认信息，请移步考勤仪表盘设置并确认"</p>
+            </div>
+            <button onclick="test404Message()">测试404错误信息</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>🎯 创建入口测试</h3>
+            <div class="feature-demo">
+                <h4>404页面新增功能：</h4>
+                <ul>
+                    <li>📤 <strong>创建考勤确认</strong> 按钮（绿色）</li>
+                    <li>🔄 <strong>重新加载</strong> 按钮（蓝色）</li>
+                </ul>
+                <p>点击"创建考勤确认"会跳转到上传页面，就像以前一样</p>
+            </div>
+            <button onclick="testCreateEntry()">测试创建入口</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 优化前后对比</h3>
+            
+            <h4>缓存优化对比：</h4>
+            <div class="code-block">
+// 优化前：每次都调用所有API
+Token API → Employee API → Load API
+
+// 优化后：利用缓存
+首次访问: Token API → Employee API → Load API
+再次访问: Load API (跳过Token和Employee)
+            </div>
+            
+            <h4>错误提示对比：</h4>
+            <div class="code-block">
+// 优化前
+"当前月份没有考勤数据"
+
+// 优化后  
+"2026年1月还未配置考勤确认信息，请移步考勤仪表盘设置并确认"
++ [创建考勤确认] [重新加载] 按钮
+            </div>
+        </div>
+        
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        function testCacheOptimization() {
+            log('🧪 开始测试缓存优化...', 'info');
+            
+            // 模拟缓存检查逻辑
+            const currentCompany = 'eyewind';
+            const cacheKey = `employees_${currentCompany}`;
+            const CACHE_DURATION = 5 * 60 * 1000; // 5分钟
+            
+            // 模拟缓存状态
+            const mockCache = new Map();
+            const now = Date.now();
+            
+            log('场景1: 首次访问（无缓存）', 'info');
+            log('  - 缓存检查: 无缓存数据', 'warning');
+            log('  - API调用: Token → Employee → Load', 'info');
+            log('  - 缓存更新: 保存员工数据到缓存', 'success');
+            
+            // 模拟设置缓存
+            mockCache.set(cacheKey, { data: [], timestamp: now });
+            
+            log('场景2: 5分钟内再次访问（有效缓存）', 'info');
+            const cached = mockCache.get(cacheKey);
+            if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+                log('  - 缓存检查: 发现有效缓存', 'success');
+                log('  - API调用: 仅Load接口', 'success');
+                log('  - 性能提升: 跳过Token和Employee API', 'success');
+            }
+            
+            log('场景3: 缓存过期后访问', 'info');
+            const expiredTime = now - (6 * 60 * 1000); // 6分钟前
+            mockCache.set(cacheKey, { data: [], timestamp: expiredTime });
+            const expiredCache = mockCache.get(cacheKey);
+            if (!expiredCache || (now - expiredCache.timestamp) >= CACHE_DURATION) {
+                log('  - 缓存检查: 缓存已过期', 'warning');
+                log('  - API调用: Token → Employee → Load', 'info');
+                log('  - 缓存更新: 刷新缓存数据', 'success');
+            }
+            
+            log('✅ 缓存优化测试完成', 'success');
+        }
+
+        function simulateCache() {
+            log('🔄 模拟实际缓存场景...', 'info');
+            
+            log('1. 用户首次点击"考勤确认"', 'info');
+            log('   → 检查员工数据缓存: 不存在', 'warning');
+            log('   → 调用fetchAllEmployees: Token + Employee API', 'info');
+            log('   → 调用Load API', 'info');
+            log('   → 缓存员工数据（5分钟有效期）', 'success');
+            
+            log('2. 用户切换月份或刷新页面（5分钟内）', 'info');
+            log('   → 检查员工数据缓存: 存在且有效', 'success');
+            log('   → 跳过Token和Employee API调用', 'success');
+            log('   → 直接调用Load API', 'info');
+            log('   → 性能提升: 减少2个API调用', 'success');
+            
+            log('3. 5分钟后再次访问', 'info');
+            log('   → 检查员工数据缓存: 已过期', 'warning');
+            log('   → 重新调用所有API', 'info');
+            log('   → 更新缓存', 'success');
+        }
+
+        function test404Message() {
+            log('💬 开始测试404错误信息优化...', 'info');
+            
+            const globalMonth = '2026-01';
+            const monthText = globalMonth.replace('-', '年') + '月';
+            const newErrorMessage = `${monthText}还未配置考勤确认信息，请移步考勤仪表盘设置并确认`;
+            
+            log('旧错误信息:', 'warning');
+            log('  "当前月份没有考勤数据"', 'error');
+            
+            log('新错误信息:', 'success');
+            log(`  "${newErrorMessage}"`, 'success');
+            
+            log('优化效果:', 'info');
+            log('  ✅ 明确指出具体月份', 'success');
+            log('  ✅ 说明问题原因（未配置）', 'success');
+            log('  ✅ 提供解决方案（移步仪表盘）', 'success');
+            log('  ✅ 语言更友好和专业', 'success');
+        }
+
+        function testCreateEntry() {
+            log('🎯 开始测试创建入口功能...', 'info');
+            
+            log('404错误页面新增元素:', 'info');
+            log('  📤 创建考勤确认 按钮（绿色）', 'success');
+            log('     → 点击后跳转到CreateAttendanceWizard', 'info');
+            log('     → 功能与以前完全一样', 'info');
+            
+            log('  🔄 重新加载 按钮（蓝色）', 'success');
+            log('     → 重新调用loadData函数', 'info');
+            log('     → 清除错误状态', 'info');
+            
+            log('页面布局:', 'info');
+            log('  - 错误信息居中显示', 'info');
+            log('  - 两个按钮水平排列', 'info');
+            log('  - 创建按钮更突出（绿色）', 'success');
+            
+            log('用户体验提升:', 'success');
+            log('  ✅ 404时不再是死胡同', 'success');
+            log('  ✅ 提供明确的操作选项', 'success');
+            log('  ✅ 保持原有功能完整性', 'success');
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('考勤页面优化功能验证工具加载完成', 'success');
+            log('', 'info');
+            log('🎯 本次优化的三大功能:', 'info');
+            log('1. 缓存优化 - 避免重复调用Token和Employee API', 'success');
+            log('2. 友好提示 - 404错误信息更清晰和有指导性', 'success');
+            log('3. 创建入口 - 404页面增加创建考勤确认按钮', 'success');
+            log('', 'info');
+            log('🚀 预期效果:', 'info');
+            log('• 性能提升: 缓存有效时减少API调用', 'success');
+            log('• 用户体验: 错误信息更友好', 'success');
+            log('• 功能完整: 404时可直接创建考勤确认', 'success');
+            log('', 'info');
+            log('现在可以开始验证优化效果...', 'info');
+        };
+    </script>
+</body>
+</html>

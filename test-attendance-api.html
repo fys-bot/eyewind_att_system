@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤API测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .test-section h3 { margin-top: 0; color: #333; }
+        button { padding: 8px 16px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .result { margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px; white-space: pre-wrap; font-family: monospace; }
+        .success { border-left: 4px solid #28a745; }
+        .error { border-left: 4px solid #dc3545; }
+    </style>
+</head>
+<body>
+    <h1>考勤API测试页面</h1>
+    
+    <div class="test-section">
+        <h3>1. 测试加载所有考勤数据</h3>
+        <button onclick="testLoadAll()">加载所有数据</button>
+        <div id="loadAllResult" class="result" style="display: none;"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>2. 测试按月份加载数据</h3>
+        <input type="text" id="monthInput" placeholder="输入月份，如: 2026-01" value="2026-01">
+        <button onclick="testLoadByMonth()">按月份加载</button>
+        <div id="loadByMonthResult" class="result" style="display: none;"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>3. 测试按用户ID加载数据</h3>
+        <input type="text" id="userIdInput" placeholder="输入用户ID" value="17513660021039158">
+        <button onclick="testLoadByUserId()">按用户ID加载</button>
+        <div id="loadByUserIdResult" class="result" style="display: none;"></div>
+    </div>
+    
+    <div class="test-section">
+        <h3>4. 测试批量UPSERT数据</h3>
+        <button onclick="testUpsert()">测试UPSERT</button>
+        <div id="upsertResult" class="result" style="display: none;"></div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/v1/attendance/status';
+        
+        function showResult(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = `result ${isError ? 'error' : 'success'}`;
+            element.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        async function testLoadAll() {
+            try {
+                const response = await fetch(`${API_BASE}/load`);
+                const data = await response.json();
+                showResult('loadAllResult', data);
+            } catch (error) {
+                showResult('loadAllResult', { error: error.message }, true);
+            }
+        }
+        
+        async function testLoadByMonth() {
+            const month = document.getElementById('monthInput').value;
+            if (!month) {
+                showResult('loadByMonthResult', { error: '请输入月份' }, true);
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/load/${month}`);
+                const data = await response.json();
+                showResult('loadByMonthResult', data);
+            } catch (error) {
+                showResult('loadByMonthResult', { error: error.message }, true);
+            }
+        }
+        
+        async function testLoadByUserId() {
+            const userId = document.getElementById('userIdInput').value;
+            if (!userId) {
+                showResult('loadByUserIdResult', { error: '请输入用户ID' }, true);
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/load/${userId}`);
+                const data = await response.json();
+                showResult('loadByUserIdResult', data);
+            } catch (error) {
+                showResult('loadByUserIdResult', { error: error.message }, true);
+            }
+        }
+        
+        async function testUpsert() {
+            const testData = {
+                data: [
+                    {
+                        userid: 'test_user_001',
+                        attd_month: '2026-01',
+                        name: '测试用户',
+                        is_send: false,
+                        is_view: false,
+                        is_confirm: false,
+                        mainCompany: 'eyewind'
+                    }
+                ]
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE}/upsert`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(testData)
+                });
+                const data = await response.json();
+                showResult('upsertResult', data);
+            } catch (error) {
+                showResult('upsertResult', { error: error.message }, true);
+            }
+        }
+    </script>
+</body>
+</html>

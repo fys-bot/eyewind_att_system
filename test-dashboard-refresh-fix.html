@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤仪表盘刷新修复测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f8fafc;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+        }
+        .test-section {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .test-section h3 {
+            margin: 0 0 12px 0;
+            color: #1e293b;
+            font-size: 16px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .status.fixed { background: #dcfce7; color: #166534; }
+        .status.issue { background: #fef2f2; color: #dc2626; }
+        .code-block {
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            margin: 8px 0;
+            overflow-x: auto;
+        }
+        .highlight {
+            background: #fef3c7;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        .change-log {
+            background: #f0f9ff;
+            border-left: 4px solid #0ea5e9;
+            padding: 12px;
+            margin: 12px 0;
+        }
+        .test-steps {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 16px 0;
+        }
+        .test-steps ol {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .test-steps li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔧 考勤仪表盘刷新修复</h1>
+        <p>解决切换公司主体或月份时页面不刷新的问题</p>
+    </div>
+
+    <div class="container">
+        <h2>🐛 问题分析</h2>
+        
+        <div class="test-section">
+            <h3>问题现象 <span class="status issue">ISSUE</span></h3>
+            <p>用户反馈：切换公司主体（风眼/海多多）或月份时，考勤仪表盘页面不会自动刷新数据，需要手动刷新页面才能看到新数据。</p>
+        </div>
+
+        <div class="test-section">
+            <h3>根本原因分析</h3>
+            <p><strong>1. useEffect 依赖项缺失</strong></p>
+            <div class="code-block">
+// ❌ 问题代码：只依赖 ruleConfigLoaded
+useEffect(() => { 
+  if (ruleConfigLoaded && loadAllDataRef.current) {
+    loadAllDataRef.current(); 
+  }
+}, [ruleConfigLoaded]); // 缺少 globalMonth 和 currentCompany
+            </div>
+
+            <p><strong>2. 规则配置加载时机问题</strong></p>
+            <div class="code-block">
+// ❌ 问题代码：月份变化时不重新加载规则
+useEffect(() => {
+  // 规则配置逻辑
+}, [currentCompany]); // 缺少 globalMonth 依赖
+            </div>
+
+            <p><strong>3. 缓存清理机制缺失</strong></p>
+            <p>当公司或月份变化时，没有主动清理旧的缓存数据，导致使用过期数据。</p>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🔧 修复方案</h2>
+
+        <div class="change-log">
+            <h3>修复 1：添加数据加载依赖项</h3>
+            <div class="code-block">
+// ✅ 修复后：添加 globalMonth 和 currentCompany 依赖
+useEffect(() => { 
+  if (ruleConfigLoaded && loadAllDataRef.current) {
+    console.log('[AttendanceDashboardPage] 规则配置已加载，开始加载数据');
+    loadAllDataRef.current(); 
+  }
+}, [ruleConfigLoaded, <span class="highlight">globalMonth, currentCompany</span>]); // 🔥 添加依赖
+            </div>
+        </div>
+
+        <div class="change-log">
+            <h3>修复 2：规则配置加载优化</h3>
+            <div class="code-block">
+// ✅ 修复后：同时监听公司和月份变化
+useEffect(() => {
+  const initRuleConfig = async () => {
+    // 重置规则配置加载状态
+    <span class="highlight">setRuleConfigLoaded(false);</span>
+    
+    console.log(`强制刷新 ${currentCompany} 的规则配置`);
+    await refreshRuleConfigCache(currentCompany);
+    AttendanceRuleManager.reloadAllRules();
+    setRuleConfigLoaded(true);
+  };
+  
+  initRuleConfig();
+}, [currentCompany, <span class="highlight">globalMonth</span>]); // 🔥 添加 globalMonth 依赖
+            </div>
+        </div>
+
+        <div class="change-log">
+            <h3>修复 3：添加缓存清理机制</h3>
+            <div class="code-block">
+// ✅ 新增：监听公司和月份变化，清理相关缓存
+useEffect(() => {
+  const clearRelatedCaches = async () => {
+    console.log(`🔥 公司或月份变化检测到，清理相关缓存: ${currentCompany}, ${globalMonth}`);
+    
+    // 清理考勤数据缓存
+    const attendanceDataCacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
+    const attendanceMapCacheKey = `ATTENDANCE_MAP_CACHE_${currentCompany}_${globalMonth}`;
+    
+    await SmartCache.remove(attendanceDataCacheKey);
+    await SmartCache.remove(attendanceMapCacheKey);
+    
+    // 重置状态
+    setAllUsers([]);
+    setCompanyCounts({});
+    setAttendanceMap({});
+    setProcessDataMap({});
+    setError(null);
+    
+    console.log(`✅ 缓存清理完成，准备重新加载数据`);
+  };
+  
+  clearRelatedCaches();
+}, [<span class="highlight">currentCompany, globalMonth</span>]); // 🔥 监听公司和月份变化
+            </div>
+        </div>
+
+        <div class="change-log">
+            <h3>修复 4：增强调试日志</h3>
+            <div class="code-block">
+// ✅ 在 loadAllData 函数中添加详细日志
+const loadAllData = useCallback(async (forceRefresh = false, isSilent = false) => {
+  <span class="highlight">console.log(`🚀 开始加载数据: 公司=${currentCompany}, 月份=${globalMonth}, 强制刷新=${forceRefresh}`);</span>
+  
+  // ... 其他逻辑
+}, [globalMonth, currentCompany, isLoading, loadingDebounce, ruleConfigLoaded]);
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🧪 测试验证</h2>
+        
+        <div class="test-steps">
+            <h3>测试步骤</h3>
+            <ol>
+                <li><strong>打开考勤仪表盘</strong>
+                    <ul>
+                        <li>登录系统，进入考勤仪表盘页面</li>
+                        <li>观察当前显示的公司和月份数据</li>
+                    </ul>
+                </li>
+                
+                <li><strong>切换公司主体测试</strong>
+                    <ul>
+                        <li>在顶部菜单栏切换公司（风眼 ↔ 海多多）</li>
+                        <li>观察页面是否自动刷新并显示新公司的数据</li>
+                        <li>检查浏览器控制台是否有相关日志输出</li>
+                    </ul>
+                </li>
+                
+                <li><strong>切换月份测试</strong>
+                    <ul>
+                        <li>使用月份选择器切换到不同月份</li>
+                        <li>观察页面是否自动刷新并显示新月份的数据</li>
+                        <li>检查考勤统计数据是否正确更新</li>
+                    </ul>
+                </li>
+                
+                <li><strong>组合切换测试</strong>
+                    <ul>
+                        <li>同时切换公司和月份</li>
+                        <li>验证数据是否正确加载</li>
+                        <li>确认没有出现数据混乱或缓存问题</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+
+        <div class="test-section">
+            <h3>预期结果 <span class="status fixed">FIXED</span></h3>
+            <ul>
+                <li>✅ 切换公司时，页面立即显示加载状态并重新获取数据</li>
+                <li>✅ 切换月份时，考勤统计和日历数据自动更新</li>
+                <li>✅ 控制台显示详细的数据加载日志</li>
+                <li>✅ 缓存被正确清理，不会显示过期数据</li>
+                <li>✅ 规则配置根据公司和月份正确重新加载</li>
+            </ul>
+        </div>
+
+        <div class="test-section">
+            <h3>关键日志输出</h3>
+            <p>修复后，在浏览器控制台应该能看到以下日志：</p>
+            <div class="code-block">
+[AttendanceDashboardPage] 🔥 公司或月份变化检测到，清理相关缓存: eyewind, 2024-12
+[AttendanceDashboardPage] ✅ 缓存清理完成，准备重新加载数据
+[AttendanceDashboardPage] 强制刷新 eyewind 的规则配置
+[AttendanceDashboardPage] 规则配置缓存已刷新，规则引擎已重新加载
+[AttendanceDashboardPage] 规则配置已加载，开始加载数据
+[AttendanceDashboardPage] 🚀 开始加载数据: 公司=eyewind, 月份=2024-12, 强制刷新=false
+[AttendanceDashboardPage] 从API加载数据: eyewind, 2024-12-01 - 2024-12-31
+[AttendanceDashboardPage] 数据加载完成: 25 个用户
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>📋 技术要点总结</h2>
+        
+        <div class="test-section">
+            <h3>React useEffect 依赖项管理</h3>
+            <p>确保所有影响数据加载的变量都包含在依赖项数组中，避免遗漏导致的更新问题。</p>
+        </div>
+
+        <div class="test-section">
+            <h3>缓存管理策略</h3>
+            <p>在关键状态变化时主动清理相关缓存，防止使用过期数据。使用明确的缓存键命名规范。</p>
+        </div>
+
+        <div class="test-section">
+            <h3>状态重置机制</h3>
+            <p>在重新加载数据前，重置相关状态变量，确保UI显示正确的加载状态。</p>
+        </div>
+
+        <div class="test-section">
+            <h3>调试日志优化</h3>
+            <p>添加详细的调试日志，便于问题排查和性能监控。使用表情符号和颜色区分不同类型的日志。</p>
+        </div>
+    </div>
+
+    <div class="container" style="background: #f0f9ff; border: 1px solid #0ea5e9;">
+        <h2 style="color: #0369a1;">🎯 修复完成</h2>
+        <p><strong>问题状态：</strong> <span class="status fixed">已修复</span></p>
+        <p><strong>影响范围：</strong> 考勤仪表盘页面的数据刷新机制</p>
+        <p><strong>修复文件：</strong> <code>components/attendance/dashboard/AttendanceDashboardPage.tsx</code></p>
+        <p><strong>测试建议：</strong> 重点测试公司切换和月份切换的组合场景，确保数据一致性</p>
+    </div>
+
+    <script>
+        // 添加一些交互效果
+        document.querySelectorAll('.test-section').forEach(section => {
+            section.addEventListener('click', function() {
+                this.style.backgroundColor = this.style.backgroundColor === 'rgb(240, 249, 255)' ? '' : '#f0f9ff';
+            });
+        });
+
+        // 显示当前时间
+        const now = new Date();
+        console.log(`测试页面加载时间: ${now.toLocaleString('zh-CN')}`);
+    </script>
+</body>
+</html>

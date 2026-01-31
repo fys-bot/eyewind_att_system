@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>304状态码修复测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        button { padding: 8px 16px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .result { margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 3px; white-space: pre-wrap; font-family: monospace; }
+        .success { border-left: 4px solid #28a745; }
+        .error { border-left: 4px solid #dc3545; }
+        .warning { border-left: 4px solid #ffc107; }
+    </style>
+</head>
+<body>
+    <h1>304状态码修复测试</h1>
+    
+    <div class="test-section">
+        <h3>测试API响应状态码处理</h3>
+        <button onclick="testAPI()">测试API调用</button>
+        <button onclick="testMultipleCalls()">测试多次调用（检查缓存）</button>
+        <div id="testResult" class="result" style="display: none;"></div>
+    </div>
+
+    <script>
+        function showResult(data, type = 'success') {
+            const element = document.getElementById('testResult');
+            element.style.display = 'block';
+            element.className = `result ${type}`;
+            element.textContent = JSON.stringify(data, null, 2);
+        }
+        
+        async function testAPI() {
+            try {
+                console.log('🔍 测试API调用...');
+                
+                const response = await fetch('/api/v1/attendance/status/load');
+                
+                console.log('📊 响应状态:', response.status);
+                console.log('📊 响应头:', Object.fromEntries(response.headers.entries()));
+                
+                const result = {
+                    status: response.status,
+                    statusText: response.statusText,
+                    ok: response.ok,
+                    headers: Object.fromEntries(response.headers.entries()),
+                    timestamp: new Date().toISOString()
+                };
+                
+                if (response.status === 304) {
+                    result.message = '收到304响应 - 内容未修改';
+                    showResult(result, 'warning');
+                } else if (response.ok) {
+                    const data = await response.json();
+                    result.data = {
+                        success: data.success,
+                        message: data.message,
+                        dataKeys: data.data ? Object.keys(data.data) : null
+                    };
+                    showResult(result, 'success');
+                } else {
+                    result.message = '请求失败';
+                    showResult(result, 'error');
+                }
+                
+            } catch (error) {
+                showResult({ error: error.message, timestamp: new Date().toISOString() }, 'error');
+            }
+        }
+        
+        async function testMultipleCalls() {
+            try {
+                console.log('🔍 测试多次API调用...');
+                
+                const results = [];
+                
+                for (let i = 0; i < 3; i++) {
+                    const response = await fetch('/api/v1/attendance/status/load');
+                    results.push({
+                        call: i + 1,
+                        status: response.status,
+                        statusText: response.statusText,
+                        ok: response.ok,
+                        timestamp: new Date().toISOString()
+                    });
+                    
+                    // 短暂延迟
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                showResult({ 
+                    message: '多次调用结果',
+                    results: results 
+                }, 'success');
+                
+            } catch (error) {
+                showResult({ error: error.message, timestamp: new Date().toISOString() }, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

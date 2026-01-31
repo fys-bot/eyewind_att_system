@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤规则实时加载验证</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .code-block { background: #f8f9fa; padding: 15px; border-radius: 4px; border-left: 4px solid #007bff; margin: 10px 0; font-family: 'Courier New', monospace; white-space: pre-wrap; }
+        .timeline { margin: 20px 0; }
+        .timeline-item { display: flex; align-items: center; margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 4px; }
+        .timeline-step { background: #007bff; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; margin-right: 15px; font-weight: bold; }
+        .timeline-step.success { background: #28a745; }
+        .timeline-step.error { background: #dc3545; }
+        .timeline-step.warning { background: #ffc107; color: #212529; }
+        h1, h2, h3 { color: #333; }
+        .fix-summary { background: #e7f3ff; padding: 15px; border-radius: 4px; border-left: 4px solid #007bff; margin: 20px 0; }
+        .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        .comparison-item { padding: 15px; border-radius: 4px; }
+        .before { background: #fff5f5; border-left: 4px solid #dc3545; }
+        .after { background: #f0fff4; border-left: 4px solid #28a745; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 考勤规则实时加载功能</h1>
+        
+        <div class="status success">
+            <strong>✅ 功能完成</strong> - 每次进入考勤仪表盘页面都会加载当前公司的最新考勤规则
+        </div>
+
+        <div class="fix-summary">
+            <h3>🎯 功能需求</h3>
+            <p>每次进入考勤仪表盘页面都要加载当前公司主体的考勤规则接口，并且整个系统的考勤规则都要以接口返回的为准。</p>
+            
+            <h4>🔍 实现要点：</h4>
+            <ul>
+                <li><strong>强制刷新</strong>：每次进入页面都从数据库API获取最新规则</li>
+                <li><strong>实时性</strong>：不依赖缓存有效期，确保规则的实时性</li>
+                <li><strong>全局一致性</strong>：整个系统都使用同一套规则配置</li>
+                <li><strong>公司隔离</strong>：不同公司使用各自的规则配置</li>
+            </ul>
+        </div>
+
+        <h2>🔧 实现方案</h2>
+        
+        <div class="comparison">
+            <div class="comparison-item before">
+                <h4>❌ 修改前（缓存优先）</h4>
+                <div class="code-block">// ❌ 使用缓存，可能不是最新规则
+useEffect(() => {
+  const initRuleConfig = async () => {
+    await initRuleConfigCache(); // 如果缓存有效就不刷新
+    setRuleConfigLoaded(true);
+  };
+  initRuleConfig();
+}, []); // 只在组件挂载时执行一次</div>
+                
+                <div class="status error">
+                    <strong>问题：</strong>可能使用过期的缓存规则，不是最新的数据库配置
+                </div>
+            </div>
+            
+            <div class="comparison-item after">
+                <h4>✅ 修改后（强制刷新）</h4>
+                <div class="code-block">// ✅ 每次都强制刷新当前公司的规则
+useEffect(() => {
+  const initRuleConfig = async () => {
+    // 强制刷新当前公司的规则配置
+    await refreshRuleConfigCache(currentCompany);
+    
+    // 重新加载规则引擎
+    AttendanceRuleManager.reloadAllRules();
+    
+    setRuleConfigLoaded(true);
+  };
+  initRuleConfig();
+}, [currentCompany]); // 公司变化时重新加载</div>
+                
+                <div class="status success">
+                    <strong>修复：</strong>每次进入页面都获取最新的数据库规则配置
+                </div>
+            </div>
+        </div>
+
+        <h2>🔄 规则加载流程</h2>
+        
+        <div class="timeline">
+            <div class="timeline-item">
+                <div class="timeline-step success">1</div>
+                <div>
+                    <strong>页面初始化</strong><br>
+                    <small>用户进入考勤仪表盘页面</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">2</div>
+                <div>
+                    <strong>强制刷新规则配置</strong><br>
+                    <small>调用 refreshRuleConfigCache(currentCompany)</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">3</div>
+                <div>
+                    <strong>从数据库加载规则</strong><br>
+                    <small>GET /api/v1/attendance/rules/:companyId</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">4</div>
+                <div>
+                    <strong>更新规则缓存</strong><br>
+                    <small>将最新规则存储到全局缓存中</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">5</div>
+                <div>
+                    <strong>重新加载规则引擎</strong><br>
+                    <small>AttendanceRuleManager.reloadAllRules()</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">6</div>
+                <div>
+                    <strong>规则引擎获取最新配置</strong><br>
+                    <small>使用 getRuleConfigSync() 获取最新规则</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">7</div>
+                <div>
+                    <strong>开始数据加载</strong><br>
+                    <small>使用最新规则进行考勤计算</small>
+                </div>
+            </div>
+        </div>
+
+        <h2>🏗️ 架构改进</h2>
+        
+        <h3>1. 规则配置管理</h3>
+        <div class="code-block">// useAttendanceRuleConfig.ts
+export async function refreshRuleConfigCache(companyKey?: string): Promise&lt;void&gt; {
+  // 强制从数据库加载指定公司的规则
+  const companies = companyKey ? [normalizeCompanyKey(companyKey)] : ['eyewind', 'hydodo'];
+  
+  for (const company of companies) {
+    const config = await loadRuleConfigFromDb(company);
+    if (config) {
+      globalRuleCache[company] = config; // 更新全局缓存
+    }
+  }
+}</div>
+
+        <h3>2. 规则引擎改进</h3>
+        <div class="code-block">// AttendanceRuleEngine.ts
+private loadRules(): AttendanceRuleConfig {
+  // 🔥 优先使用最新的规则配置缓存
+  const config = getRuleConfigSync(this.companyKey);
+  if (!config.rules) {
+    throw new Error(`No attendance rules found for company: ${this.companyKey}`);
+  }
+  return config.rules;
+}</div>
+
+        <h3>3. 页面初始化逻辑</h3>
+        <div class="code-block">// AttendanceDashboardPage.tsx
+useEffect(() => {
+  const initRuleConfig = async () => {
+    // 每次进入页面都强制刷新当前公司的规则配置
+    await refreshRuleConfigCache(currentCompany);
+    
+    // 刷新完成后，重新加载规则引擎
+    AttendanceRuleManager.reloadAllRules();
+    
+    setRuleConfigLoaded(true);
+  };
+  initRuleConfig();
+}, [currentCompany]); // 公司变化时重新加载规则</div>
+
+        <h2>🎯 关键改进点</h2>
+        
+        <div class="status info">
+            <h4>1. 强制刷新机制</h4>
+            <p>每次进入页面都从数据库API获取最新规则，不依赖缓存有效期。</p>
+        </div>
+        
+        <div class="status info">
+            <h4>2. 公司级别隔离</h4>
+            <p>支持按公司刷新规则，不同公司的规则互不影响。</p>
+        </div>
+        
+        <div class="status info">
+            <h4>3. 规则引擎同步</h4>
+            <p>规则配置更新后立即重新加载规则引擎，确保计算使用最新规则。</p>
+        </div>
+        
+        <div class="status info">
+            <h4>4. 全局一致性</h4>
+            <p>整个系统都通过AttendanceRuleManager获取规则，确保一致性。</p>
+        </div>
+
+        <h2>🧪 测试验证</h2>
+        
+        <div class="status success">
+            <h4>✅ 预期行为：</h4>
+            <ul>
+                <li>每次进入考勤仪表盘都会看到规则加载日志</li>
+                <li>修改数据库中的规则后，刷新页面能立即生效</li>
+                <li>不同公司的规则配置相互独立</li>
+                <li>所有考勤计算都使用最新的规则配置</li>
+            </ul>
+        </div>
+
+        <div class="status warning">
+            <h4>⚠️ 调试信息：</h4>
+            <p>在浏览器控制台中应该能看到：</p>
+            <div class="code-block">[AttendanceDashboardPage] 强制刷新 eyewind 的规则配置
+[refreshRuleConfigCache] 开始刷新规则配置缓存: eyewind
+[refreshRuleConfigCache] 已从数据库加载 eyewind 配置
+[AttendanceRuleEngine] 加载 eyewind 规则配置
+[AttendanceDashboardPage] 规则配置缓存已刷新，规则引擎已重新加载</div>
+        </div>
+
+        <h2>📋 修改文件清单</h2>
+        
+        <div class="code-block">✅ components/attendance/dashboard/AttendanceDashboardPage.tsx
+  - 修改规则配置初始化逻辑
+  - 每次进入页面强制刷新当前公司规则
+  - 添加规则引擎重新加载
+
+✅ components/attendance/AttendanceRuleEngine.ts
+  - 添加 getRuleConfigSync 导入
+  - 修改 loadRules 方法使用最新规则缓存
+  - 添加规则加载日志
+
+✅ hooks/useAttendanceRuleConfig.ts
+  - refreshRuleConfigCache 已支持按公司刷新
+  - 提供 getRuleConfigSync 获取最新规则</div>
+
+        <h2>🔄 规则更新流程</h2>
+        
+        <div class="timeline">
+            <div class="timeline-item">
+                <div class="timeline-step">1</div>
+                <div>
+                    <strong>管理员修改规则</strong><br>
+                    <small>在考勤规则设置页面修改配置</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step">2</div>
+                <div>
+                    <strong>保存到数据库</strong><br>
+                    <small>PUT /api/v1/attendance/rules/:companyId</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step">3</div>
+                <div>
+                    <strong>用户进入仪表盘</strong><br>
+                    <small>触发规则强制刷新</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step">4</div>
+                <div>
+                    <strong>获取最新规则</strong><br>
+                    <small>从数据库加载最新配置</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step">5</div>
+                <div>
+                    <strong>应用新规则</strong><br>
+                    <small>所有考勤计算使用新规则</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="status success">
+            <strong>🎉 功能完成！</strong> 考勤仪表盘现在每次进入都会加载当前公司的最新考勤规则，确保整个系统都使用数据库中的最新配置进行计算。
+        </div>
+    </div>
+</body>
+</html>

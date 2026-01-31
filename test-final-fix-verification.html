@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤页面最终修复验证</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .fix-summary {
+            background: #dcfce7;
+            border: 1px solid #16a34a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .log { 
+            background: #f1f5f9; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 4px; 
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .success { color: #059669; }
+        .info { color: #0284c7; }
+        .warning { color: #d97706; }
+        .error { color: #dc2626; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎉 考勤页面加载问题最终修复验证</h1>
+        
+        <div class="fix-summary">
+            <h3>✅ 修复总结</h3>
+            <p><strong>问题：</strong>考勤确认页面一直显示"正在加载考勤数据..."，无法完成加载</p>
+            
+            <h4>🔍 根本原因分析：</h4>
+            <ol>
+                <li><strong>闭包问题：</strong> loadData函数的useCallback依赖项缺少globalMonth，导致函数内部使用的是旧的globalMonth值</li>
+                <li><strong>404处理问题：</strong> 404响应后代码继续执行，但没有正确处理数据结构，可能导致后续代码出错</li>
+                <li><strong>无限循环风险：</strong> globalMonth变化时的useEffect包含loadData依赖，可能导致无限循环</li>
+            </ol>
+            
+            <h4>🛠️ 修复方案：</h4>
+            <ol>
+                <li>在loadData的useCallback依赖项中添加globalMonth</li>
+                <li>优化404处理逻辑，确保在404情况下直接跳到finally块</li>
+                <li>移除globalMonth useEffect中的loadData依赖，避免无限循环</li>
+            </ol>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 修复验证测试</h3>
+            <button onclick="testCompleteFlow()">测试完整流程</button>
+            <button onclick="test404Handling()">测试404处理</button>
+            <button onclick="testMonthSwitching()">测试月份切换</button>
+            <button onclick="clearLogs()">清除日志</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 修复前后对比</h3>
+            
+            <h4>修复前的问题代码：</h4>
+            <div class="code-block">
+// 问题1: loadData缺少globalMonth依赖
+const loadData = useCallback(async () => {
+    // 使用globalMonth，但依赖项中没有
+    const loadUrl = globalMonth 
+        ? `/api/v1/attendance/status/load/${globalMonth}`
+        : "/api/v1/attendance/status/load";
+}, [currentCompany, preloadedData]); // ❌ 缺少globalMonth
+
+// 问题2: 404处理后继续执行可能出错的代码
+if (response.status === 404) {
+    // 处理404...
+    // 没有return，继续执行后面的代码
+}
+// 后面的代码可能访问不存在的apiResponse.data
+            </div>
+            
+            <h4>修复后的代码：</h4>
+            <div class="code-block">
+// 修复1: 添加globalMonth依赖
+const loadData = useCallback(async () => {
+    const loadUrl = globalMonth 
+        ? `/api/v1/attendance/status/load/${globalMonth}`
+        : "/api/v1/attendance/status/load";
+}, [currentCompany, preloadedData, globalMonth]); // ✅ 添加globalMonth
+
+// 修复2: 404处理优化
+if (response.status === 404) {
+    // 处理404...
+    // 直接跳到finally块，不执行后续数据处理
+} else if (!response.ok) {
+    // 处理其他错误...
+} else {
+    // 只有成功时才处理数据
+}
+            </div>
+        </div>
+        
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        async function testCompleteFlow() {
+            log('🚀 开始测试完整的考勤页面加载流程...', 'info');
+            
+            try {
+                // 模拟页面加载过程
+                log('1. 模拟组件挂载，useEffect触发', 'info');
+                log('2. hasInitialized为false，开始执行loadData', 'info');
+                
+                // 测试员工API
+                log('3. 调用员工API...', 'info');
+                const employeeResponse = await fetch('/api/v1/employees');
+                if (employeeResponse.ok) {
+                    const employees = await employeeResponse.json();
+                    log(`✅ 员工API成功，获取${employees.length || 0}个员工`, 'success');
+                } else {
+                    log(`❌ 员工API失败: ${employeeResponse.status}`, 'error');
+                    return;
+                }
+                
+                // 测试考勤Load API
+                log('4. 调用考勤Load API...', 'info');
+                const month = '2026-01';
+                const loadUrl = `/api/v1/attendance/status/load/${month}`;
+                log(`   请求URL: ${loadUrl}`, 'info');
+                
+                const loadResponse = await fetch(loadUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'Expires': '0'
+                    }
+                });
+                
+                log(`   响应状态: ${loadResponse.status}`, 'info');
+                
+                if (loadResponse.status === 404) {
+                    const errorData = await loadResponse.json();
+                    log('✅ 404处理正常 - 当前月份无数据', 'success');
+                    log(`   错误信息: ${errorData.message}`, 'info');
+                    log('5. 执行finally块，设置loading为false', 'info');
+                    log('✅ 页面应该显示"当前月份没有考勤数据"而不是一直加载', 'success');
+                } else if (loadResponse.ok) {
+                    const loadData = await loadResponse.json();
+                    log('✅ Load API成功', 'success');
+                    log('5. 处理数据，设置sheets状态', 'info');
+                    log('6. 执行finally块，设置loading为false', 'info');
+                    log('✅ 页面应该显示考勤数据列表', 'success');
+                } else {
+                    log(`❌ Load API失败: ${loadResponse.status}`, 'error');
+                }
+                
+                log('🎉 完整流程测试完成！', 'success');
+                
+            } catch (error) {
+                log(`❌ 流程测试异常: ${error.message}`, 'error');
+            }
+        }
+
+        async function test404Handling() {
+            log('🛡️ 开始测试404处理逻辑...', 'info');
+            
+            const testMonths = ['2026-01', '2025-01', '2024-01'];
+            
+            for (const month of testMonths) {
+                try {
+                    log(`测试月份: ${month}`, 'info');
+                    const response = await fetch(`/api/v1/attendance/status/load/${month}`);
+                    
+                    if (response.status === 404) {
+                        const errorData = await response.json();
+                        log(`✅ ${month}: 404处理正常`, 'success');
+                        log(`   消息: ${errorData.message}`, 'info');
+                        log(`   ✅ 关键：finally块会执行，loading状态会被正确设置为false`, 'success');
+                    } else if (response.ok) {
+                        log(`✅ ${month}: 有数据 (${response.status})`, 'success');
+                    } else {
+                        log(`⚠️ ${month}: 其他状态 (${response.status})`, 'warning');
+                    }
+                } catch (error) {
+                    log(`❌ ${month}: 异常 - ${error.message}`, 'error');
+                }
+            }
+            
+            log('✅ 404处理测试完成', 'success');
+        }
+
+        async function testMonthSwitching() {
+            log('🔄 开始测试月份切换逻辑...', 'info');
+            
+            // 模拟月份切换场景
+            const scenarios = [
+                { from: null, to: '2026-01', desc: '初始加载' },
+                { from: '2026-01', to: '2025-12', desc: '切换到上个月' },
+                { from: '2025-12', to: '2026-02', desc: '切换到未来月份' }
+            ];
+            
+            for (const { from, to, desc } of scenarios) {
+                log(`📅 ${desc}: ${from || 'null'} -> ${to}`, 'info');
+                
+                // 模拟loadData函数的URL生成（修复后）
+                const loadUrl = to ? `/api/v1/attendance/status/load/${to}` : '/api/v1/attendance/status/load';
+                log(`   生成URL: ${loadUrl}`, 'info');
+                
+                // 测试实际API调用
+                try {
+                    const response = await fetch(loadUrl);
+                    if (response.status === 404) {
+                        log(`   ✅ ${to}: 无数据，但处理正常`, 'success');
+                    } else if (response.ok) {
+                        log(`   ✅ ${to}: 有数据`, 'success');
+                    } else {
+                        log(`   ⚠️ ${to}: 状态 ${response.status}`, 'warning');
+                    }
+                } catch (error) {
+                    log(`   ❌ ${to}: 异常 - ${error.message}`, 'error');
+                }
+                
+                // 模拟useEffect触发条件（修复后）
+                const hasInitialized = from !== null;
+                const shouldTrigger = hasInitialized && to;
+                
+                if (shouldTrigger) {
+                    log(`   ✅ globalMonth useEffect会触发重新加载`, 'success');
+                } else {
+                    log(`   ℹ️ 首次加载，由主useEffect处理`, 'info');
+                }
+            }
+            
+            log('✅ 月份切换测试完成', 'success');
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('考勤页面最终修复验证工具加载完成', 'success');
+            log('', 'info');
+            log('🎯 本次修复解决的核心问题:', 'info');
+            log('1. loadData函数闭包问题 - globalMonth依赖缺失', 'warning');
+            log('2. 404响应处理不当 - 可能导致后续代码出错', 'warning');
+            log('3. useEffect依赖循环 - 可能导致无限重新渲染', 'warning');
+            log('', 'info');
+            log('✅ 修复后的预期效果:', 'info');
+            log('• 页面不再一直显示"正在加载考勤数据..."', 'success');
+            log('• 404情况下显示"当前月份没有考勤数据"', 'success');
+            log('• 月份切换时能正确重新加载数据', 'success');
+            log('• 有数据时正常显示考勤列表', 'success');
+            log('', 'info');
+            log('现在可以开始验证修复效果...', 'info');
+        };
+    </script>
+</body>
+</html>

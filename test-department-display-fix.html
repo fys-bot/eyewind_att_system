@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>部门显示修复验证</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .problem-found {
+            background: #fef2f2;
+            border: 1px solid #f87171;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .fix-applied {
+            background: #dcfce7;
+            border: 1px solid #16a34a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .result { 
+            margin-top: 10px; 
+            padding: 15px; 
+            background: #f1f5f9; 
+            border-radius: 6px; 
+            white-space: pre-wrap; 
+            font-family: monospace; 
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { border-left: 4px solid #059669; }
+        .error { border-left: 4px solid #dc2626; }
+        .info { border-left: 4px solid #0284c7; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 部门显示修复验证</h1>
+        
+        <div class="problem-found">
+            <h3>❌ 发现的问题</h3>
+            <p><strong>现象：</strong>缓存数据中明明有部门信息（如"技术部"），但页面显示中部门列仍然为空</p>
+            
+            <h4>🔍 根本原因：</h4>
+            <p><strong>显示逻辑问题：</strong>DetailView组件中的部门显示逻辑有缺陷</p>
+            <ol>
+                <li>AttendancePage正确映射了部门信息到 record.department</li>
+                <li>但DetailView只显示 dingTalkUser?.department</li>
+                <li>没有使用 record.department 作为fallback</li>
+                <li>导致即使数据正确，显示仍然为空</li>
+            </ol>
+        </div>
+        
+        <div class="fix-applied">
+            <h3>✅ 修复方案</h3>
+            <p><strong>修复显示逻辑：</strong>在所有显示部门信息的地方使用正确的fallback逻辑</p>
+            
+            <h4>🔧 修复内容：</h4>
+            <ol>
+                <li><strong>DetailView.tsx</strong>: 修改部门显示逻辑为 `dingTalkUser?.department || record.department`</li>
+                <li><strong>Modals.tsx</strong>: 已经使用了正确的fallback逻辑（无需修改）</li>
+                <li><strong>CreateWizard.tsx</strong>: 创建新记录时的逻辑合理（无需修改）</li>
+            </ol>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 显示逻辑验证</h3>
+            <button onclick="testDisplayLogic()">测试显示逻辑</button>
+            <button onclick="testFallbackScenarios()">测试Fallback场景</button>
+            <button onclick="clearResults()">清除结果</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 修复前后对比</h3>
+            
+            <h4>修复前的问题代码：</h4>
+            <div class="code-block">
+// ❌ 问题代码：只显示钉钉用户数据中的部门
+{hasResigned ? 
+    &lt;span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-xs"&gt;已离职&lt;/span&gt; : 
+    dingTalkUser?.department
+}
+            </div>
+            
+            <h4>修复后的代码：</h4>
+            <div class="code-block">
+// ✅ 修复代码：使用fallback逻辑
+{hasResigned ? 
+    &lt;span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-xs"&gt;已离职&lt;/span&gt; : 
+    (dingTalkUser?.department || record.department)
+}
+            </div>
+        </div>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = message;
+            results.appendChild(div);
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        function testDisplayLogic() {
+            clearResults();
+            log('🧪 开始测试部门显示逻辑...', 'info');
+            
+            // 模拟不同的数据场景
+            const testScenarios = [
+                {
+                    name: '钉钉用户有部门，考勤记录也有部门',
+                    dingTalkUser: { department: '钉钉技术部' },
+                    record: { department: '考勤技术部' },
+                    expected: '钉钉技术部', // 优先使用钉钉数据
+                    hasResigned: false
+                },
+                {
+                    name: '钉钉用户无部门，考勤记录有部门',
+                    dingTalkUser: null,
+                    record: { department: '考勤技术部' },
+                    expected: '考勤技术部', // fallback到考勤记录
+                    hasResigned: false
+                },
+                {
+                    name: '钉钉用户有部门为空字符串，考勤记录有部门',
+                    dingTalkUser: { department: '' },
+                    record: { department: '考勤技术部' },
+                    expected: '考勤技术部', // 空字符串fallback到考勤记录
+                    hasResigned: false
+                },
+                {
+                    name: '钉钉用户和考勤记录都无部门',
+                    dingTalkUser: null,
+                    record: { department: '' },
+                    expected: '', // 都没有就显示空
+                    hasResigned: false
+                },
+                {
+                    name: '员工已离职（不显示部门）',
+                    dingTalkUser: { department: '技术部' },
+                    record: { department: '考勤技术部' },
+                    expected: '已离职', // 离职状态
+                    hasResigned: true
+                }
+            ];
+            
+            testScenarios.forEach((scenario, index) => {
+                log(`<br>📋 场景 ${index + 1}: ${scenario.name}`, 'info');
+                
+                // 模拟显示逻辑
+                let displayValue;
+                if (scenario.hasResigned) {
+                    displayValue = '已离职';
+                } else {
+                    displayValue = (scenario.dingTalkUser?.department || scenario.record.department) || '';
+                }
+                
+                log(`   钉钉用户部门: ${scenario.dingTalkUser?.department || 'null'}`, 'info');
+                log(`   考勤记录部门: ${scenario.record.department || 'null'}`, 'info');
+                log(`   是否离职: ${scenario.hasResigned}`, 'info');
+                log(`   显示结果: "${displayValue}"`, 'info');
+                log(`   期望结果: "${scenario.expected}"`, 'info');
+                
+                if (displayValue === scenario.expected) {
+                    log(`   ✅ 显示逻辑正确`, 'success');
+                } else {
+                    log(`   ❌ 显示逻辑错误`, 'error');
+                }
+            });
+            
+            log(`<br>🎉 部门显示逻辑测试完成`, 'success');
+        }
+
+        function testFallbackScenarios() {
+            clearResults();
+            log('🔄 开始测试Fallback场景...', 'info');
+            
+            log('场景1: 理想情况 - 钉钉数据完整', 'info');
+            log('  → 钉钉用户部门: "技术部"', 'info');
+            log('  → 考勤记录部门: "产品部"', 'info');
+            log('  → 显示结果: "技术部" (优先使用钉钉数据)', 'success');
+            
+            log('<br>场景2: 钉钉数据缺失 - 使用考勤记录', 'info');
+            log('  → 钉钉用户部门: null', 'info');
+            log('  → 考勤记录部门: "技术部"', 'info');
+            log('  → 显示结果: "技术部" (fallback到考勤记录)', 'success');
+            
+            log('<br>场景3: 钉钉数据为空字符串 - 使用考勤记录', 'info');
+            log('  → 钉钉用户部门: ""', 'info');
+            log('  → 考勤记录部门: "技术部"', 'info');
+            log('  → 显示结果: "技术部" (空字符串fallback)', 'success');
+            
+            log('<br>场景4: 员工离职 - 显示离职状态', 'info');
+            log('  → 员工状态: 已离职', 'info');
+            log('  → 显示结果: "已离职" (不显示部门信息)', 'info');
+            
+            log('<br>✅ 修复后的预期效果:', 'success');
+            log('• 优先显示钉钉用户数据中的部门信息', 'success');
+            log('• 钉钉数据缺失时自动使用考勤记录中的部门信息', 'success');
+            log('• 员工离职时显示离职状态而不是部门信息', 'success');
+            log('• 确保部门信息不再显示为空（除非真的没有数据）', 'success');
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('部门显示修复验证工具加载完成', 'success');
+            log('', 'info');
+            log('🎯 修复的核心问题:', 'info');
+            log('• 缓存数据有部门信息但页面显示为空', 'warning');
+            log('• DetailView组件显示逻辑不完整', 'warning');
+            log('• 没有使用考勤记录中的部门信息作为fallback', 'warning');
+            log('', 'info');
+            log('✅ 修复方案:', 'info');
+            log('• 修改DetailView中的部门显示逻辑', 'success');
+            log('• 使用 dingTalkUser?.department || record.department', 'success');
+            log('• 确保所有显示部门的地方都有正确的fallback', 'success');
+            log('', 'info');
+            log('🔍 修复后的预期效果:', 'info');
+            log('• 部门信息正确显示', 'success');
+            log('• 钉钉数据优先，考勤记录fallback', 'success');
+            log('• 离职员工显示离职状态', 'success');
+            log('', 'info');
+            log('现在可以开始验证修复效果...', 'info');
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>月份选择器测试</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .demo-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .log { 
+            background: #f1f5f9; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 4px; 
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success { color: #059669; }
+        .info { color: #0284c7; }
+        .warning { color: #d97706; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .current-state {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>月份选择器和全局月份同步测试</h1>
+        <p>这个页面用于测试新添加的月份选择器功能和全局月份同步机制。</p>
+        
+        <div class="demo-section">
+            <h3>功能说明</h3>
+            <ul>
+                <li>✅ 在菜单栏添加了月份日历编辑器</li>
+                <li>✅ 支持全局月份同步，所有页面共享同一个月份状态</li>
+                <li>✅ 考勤确认页面支持月份过滤，只显示选中月份的数据</li>
+                <li>✅ 没有数据时显示空状态，提示用户创建或切换月份</li>
+                <li>✅ 月份状态持久化存储，刷新页面后保持选择</li>
+            </ul>
+        </div>
+
+        <div class="demo-section">
+            <h3>当前状态</h3>
+            <div class="current-state">
+                <div><strong>当前全局月份:</strong> <span id="currentMonth">-</span></div>
+                <div><strong>当前公司:</strong> <span id="currentCompany">-</span></div>
+                <div><strong>localStorage状态:</strong> <span id="localStorageState">-</span></div>
+            </div>
+        </div>
+
+        <div class="demo-section">
+            <h3>测试操作</h3>
+            <button onclick="testLocalStorage()">测试localStorage</button>
+            <button onclick="testMonthFormat()">测试月份格式化</button>
+            <button onclick="testEmptyState()">测试空状态逻辑</button>
+            <button onclick="clearLogs()">清除日志</button>
+        </div>
+        
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        function updateCurrentState() {
+            const globalMonth = localStorage.getItem('globalMonth') || '未设置';
+            const currentCompany = localStorage.getItem('currentCompany') || '未设置';
+            
+            document.getElementById('currentMonth').textContent = globalMonth;
+            document.getElementById('currentCompany').textContent = currentCompany;
+            document.getElementById('localStorageState').textContent = 
+                `globalMonth: ${globalMonth}, currentCompany: ${currentCompany}`;
+        }
+
+        function testLocalStorage() {
+            log('开始测试localStorage功能...', 'info');
+            
+            // 测试设置和读取
+            const testMonth = '2024-12';
+            localStorage.setItem('globalMonth', testMonth);
+            const retrieved = localStorage.getItem('globalMonth');
+            
+            if (retrieved === testMonth) {
+                log(`✅ localStorage读写正常: ${retrieved}`, 'success');
+            } else {
+                log(`❌ localStorage读写异常: 期望 ${testMonth}, 实际 ${retrieved}`, 'warning');
+            }
+            
+            updateCurrentState();
+        }
+
+        function testMonthFormat() {
+            log('开始测试月份格式化...', 'info');
+            
+            const testCases = [
+                { input: '2024-01', expected: '2024年1月' },
+                { input: '2024-12', expected: '2024年12月' },
+                { input: '2023-06', expected: '2023年6月' }
+            ];
+            
+            function formatMonth(monthStr) {
+                try {
+                    const [year, month] = monthStr.split('-');
+                    return `${year}年${parseInt(month)}月`;
+                } catch {
+                    return monthStr;
+                }
+            }
+            
+            testCases.forEach(({ input, expected }) => {
+                const result = formatMonth(input);
+                if (result === expected) {
+                    log(`✅ 格式化正确: ${input} -> ${result}`, 'success');
+                } else {
+                    log(`❌ 格式化错误: ${input} -> ${result}, 期望: ${expected}`, 'warning');
+                }
+            });
+        }
+
+        function testEmptyState() {
+            log('开始测试空状态逻辑...', 'info');
+            
+            // 模拟空状态条件
+            const testConditions = [
+                { sheets: [], globalMonth: '2024-12', expected: true, desc: '有全局月份，无数据' },
+                { sheets: [], globalMonth: null, expected: false, desc: '无全局月份，无数据' },
+                { sheets: [{ month: '2024-12' }], globalMonth: '2024-12', expected: false, desc: '有全局月份，有数据' }
+            ];
+            
+            testConditions.forEach(({ sheets, globalMonth, expected, desc }) => {
+                const shouldShowEmpty = !false && sheets.length === 0 && globalMonth;
+                if (shouldShowEmpty === expected) {
+                    log(`✅ 空状态逻辑正确: ${desc}`, 'success');
+                } else {
+                    log(`❌ 空状态逻辑错误: ${desc}, 期望: ${expected}, 实际: ${shouldShowEmpty}`, 'warning');
+                }
+            });
+        }
+
+        function checkMainApp() {
+            log('检查主应用状态...', 'info');
+            
+            // 检查是否在主应用中
+            if (window.location.pathname.includes('test-month-picker.html')) {
+                log('当前在测试页面，请在主应用中测试完整功能', 'warning');
+                log('主应用地址: http://localhost:3001/', 'info');
+            } else {
+                log('在主应用中，可以测试完整功能', 'success');
+            }
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('月份选择器测试页面加载完成', 'success');
+            updateCurrentState();
+            checkMainApp();
+            
+            // 监听localStorage变化
+            window.addEventListener('storage', function(e) {
+                if (e.key === 'globalMonth' || e.key === 'currentCompany') {
+                    log(`localStorage变化: ${e.key} = ${e.newValue}`, 'info');
+                    updateCurrentState();
+                }
+            });
+            
+            // 定期更新状态显示
+            setInterval(updateCurrentState, 2000);
+        };
+    </script>
+</body>
+</html>

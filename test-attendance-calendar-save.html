@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤日历编辑保存入库功能验证</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .code-block { background: #f8f9fa; padding: 15px; border-radius: 4px; border-left: 4px solid #007bff; margin: 10px 0; font-family: 'Courier New', monospace; white-space: pre-wrap; }
+        .timeline { margin: 20px 0; }
+        .timeline-item { display: flex; align-items: center; margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 4px; }
+        .timeline-step { background: #007bff; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; margin-right: 15px; font-weight: bold; }
+        .timeline-step.success { background: #28a745; }
+        .timeline-step.error { background: #dc3545; }
+        .timeline-step.warning { background: #ffc107; color: #212529; }
+        h1, h2, h3 { color: #333; }
+        .fix-summary { background: #e7f3ff; padding: 15px; border-radius: 4px; border-left: 4px solid #007bff; margin: 20px 0; }
+        .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
+        .comparison-item { padding: 15px; border-radius: 4px; }
+        .before { background: #fff5f5; border-left: 4px solid #dc3545; }
+        .after { background: #f0fff4; border-left: 4px solid #28a745; }
+        .api-endpoint { background: #e3f2fd; padding: 10px; border-radius: 4px; font-family: monospace; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 考勤日历编辑保存入库功能</h1>
+        
+        <div class="status success">
+            <strong>✅ 功能完成</strong> - 考勤日历编辑保存后现在会正确入库到数据库
+        </div>
+
+        <div class="fix-summary">
+            <h3>🎯 功能需求</h3>
+            <p>用户在考勤日历页面编辑考勤数据后，点击保存需要将修改的数据入库到数据库中，而不是仅保存到本地缓存。</p>
+            
+            <h4>🔍 实现要点：</h4>
+            <ul>
+                <li><strong>数据库入库</strong>：调用服务器API将修改的考勤数据保存到数据库</li>
+                <li><strong>批量更新</strong>：支持一次性保存多条考勤记录的修改</li>
+                <li><strong>错误处理</strong>：提供降级方案，数据库保存失败时可选择保存到本地缓存</li>
+                <li><strong>审计日志</strong>：记录修改操作的详细日志</li>
+            </ul>
+        </div>
+
+        <h2>🔧 实现方案</h2>
+        
+        <div class="comparison">
+            <div class="comparison-item before">
+                <h4>❌ 修改前（仅本地缓存）</h4>
+                <div class="code-block">// ❌ 只保存到本地缓存
+const cacheKey = `ATTENDANCE_MAP_CACHE_${currentCompany}_${month}`;
+await SmartCache.set(cacheKey, attendanceMap);
+
+// 尝试同步到服务器（可选）
+try {
+  // 可能失败，但不影响"保存成功"的提示
+  await attendanceApiService.batchUpdateDaily(companyId, updates);
+} catch (apiError) {
+  console.warn('服务器同步失败，数据仅保存到本地');
+}
+
+alert('✅ 保存成功！'); // 即使数据库保存失败也显示成功</div>
+                
+                <div class="status error">
+                    <strong>问题：</strong>数据只保存到本地缓存，刷新页面或切换设备后修改会丢失
+                </div>
+            </div>
+            
+            <div class="comparison-item after">
+                <h4>✅ 修改后（数据库入库）</h4>
+                <div class="code-block">// ✅ 优先保存到数据库
+const updates = []; // 收集所有修改的记录
+
+// 构建更新记录
+for (const [userId, userDays] of Object.entries(attendanceMap)) {
+  for (const [dayStr, status] of Object.entries(userDays)) {
+    updates.push({
+      userId,
+      date,
+      status: status.status,
+      onDutyTime: status.onDutyTime,
+      offDutyTime: status.offDutyTime,
+      records: status.records || [],
+      editReason: '考勤日历编辑修改',
+      linkedProcInstId: status.records?.find(r => r.procInstId)?.procInstId
+    });
+  }
+}
+
+// 调用API进行入库
+const result = await attendanceApiService.batchUpdateDaily(companyId, updates);
+
+// 数据库保存成功后，更新本地缓存
+await SmartCache.set(cacheKey, attendanceMap);
+
+alert(`✅ 保存成功！已更新 ${result.updated} 条记录到数据库`);</div>
+                
+                <div class="status success">
+                    <strong>修复：</strong>数据优先保存到数据库，确保持久化和多设备同步
+                </div>
+            </div>
+        </div>
+
+        <h2>🔄 保存流程</h2>
+        
+        <div class="timeline">
+            <div class="timeline-item">
+                <div class="timeline-step success">1</div>
+                <div>
+                    <strong>用户编辑考勤数据</strong><br>
+                    <small>在考勤日历中修改员工的考勤状态</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">2</div>
+                <div>
+                    <strong>点击保存按钮</strong><br>
+                    <small>触发handleSaveEdit函数</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">3</div>
+                <div>
+                    <strong>确认保存提示</strong><br>
+                    <small>显示保存确认对话框，说明将入库到数据库</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">4</div>
+                <div>
+                    <strong>收集修改数据</strong><br>
+                    <small>遍历attendanceMap，构建更新记录数组</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">5</div>
+                <div>
+                    <strong>调用API入库</strong><br>
+                    <small>PUT /api/v1/attendance/daily/:companyId</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">6</div>
+                <div>
+                    <strong>数据库保存</strong><br>
+                    <small>服务器端批量更新考勤记录到数据库</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">7</div>
+                <div>
+                    <strong>记录审计日志</strong><br>
+                    <small>记录修改操作的详细日志</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">8</div>
+                <div>
+                    <strong>更新本地缓存</strong><br>
+                    <small>数据库保存成功后，同步更新本地缓存</small>
+                </div>
+            </div>
+            
+            <div class="timeline-item">
+                <div class="timeline-step success">9</div>
+                <div>
+                    <strong>显示成功提示</strong><br>
+                    <small>显示实际更新的记录数量</small>
+                </div>
+            </div>
+        </div>
+
+        <h2>🏗️ 技术实现</h2>
+        
+        <h3>1. 数据收集</h3>
+        <div class="code-block">// 遍历考勤地图，收集所有修改的记录
+const updates: any[] = [];
+for (const [userId, userDays] of Object.entries(attendanceMap)) {
+  for (const [dayStr, status] of Object.entries(userDays)) {
+    const day = parseInt(dayStr);
+    const date = `${month}-${String(day).padStart(2, '0')}`;
+    
+    const updateRecord = {
+      userId,
+      date,
+      status: status.status,
+      onDutyTime: status.onDutyTime,
+      offDutyTime: status.offDutyTime,
+      records: status.records || [],
+      editReason: '考勤日历编辑修改',
+      linkedProcInstId: status.records?.find(r => r.procInstId)?.procInstId
+    };
+    
+    updates.push(updateRecord);
+  }
+}</div>
+
+        <h3>2. API调用</h3>
+        <div class="api-endpoint">
+        <strong>PUT</strong> /api/v1/attendance/daily/:companyId
+        </div>
+        <div class="code-block">// 调用批量更新API
+const result = await attendanceApiService.batchUpdateDaily(companyId, updates);
+
+// 返回结果
+{
+  "updated": 15,        // 实际更新的记录数
+  "editLogIds": [...]   // 生成的编辑日志ID列表
+}</div>
+
+        <h3>3. 错误处理</h3>
+        <div class="code-block">try {
+  // 尝试数据库保存
+  const result = await attendanceApiService.batchUpdateDaily(companyId, updates);
+  alert(`✅ 保存成功！已更新 ${result.updated} 条记录到数据库`);
+} catch (error) {
+  // 数据库保存失败，提供降级选项
+  const fallbackMessage = `
+❌ 数据库保存失败：${error.message}
+
+是否仅保存到本地缓存？
+• 点击"确定"：保存到本地缓存（下次刷新可能丢失）
+• 点击"取消"：放弃保存，继续编辑
+  `;
+  
+  if (confirm(fallbackMessage)) {
+    await SmartCache.set(cacheKey, attendanceMap);
+    alert('⚠️ 已保存到本地缓存，建议稍后重试数据库保存');
+  }
+}</div>
+
+        <h2>🎯 关键改进点</h2>
+        
+        <div class="status info">
+            <h4>1. 数据库优先</h4>
+            <p>修改保存逻辑，优先保存到数据库，确保数据持久化。</p>
+        </div>
+        
+        <div class="status info">
+            <h4>2. 批量操作</h4>
+            <p>支持一次性保存多条考勤记录的修改，提高效率。</p>
+        </div>
+        
+        <div class="status info">
+            <h4>3. 错误处理</h4>
+            <p>提供降级方案，数据库保存失败时可选择保存到本地缓存。</p>
+        </div>
+        
+        <div class="status info">
+            <h4>4. 审计日志</h4>
+            <p>服务器端自动记录修改操作的详细日志，便于追踪。</p>
+        </div>
+
+        <h2>🧪 测试验证</h2>
+        
+        <div class="status success">
+            <h4>✅ 预期行为：</h4>
+            <ul>
+                <li>编辑考勤数据后点击保存，数据会入库到数据库</li>
+                <li>保存成功后显示实际更新的记录数量</li>
+                <li>数据库保存失败时提供降级选项</li>
+                <li>可以在编辑日志中查看修改记录</li>
+                <li>多设备间数据保持同步</li>
+            </ul>
+        </div>
+
+        <div class="status warning">
+            <h4>⚠️ 测试步骤：</h4>
+            <ol>
+                <li><strong>启动服务器</strong>：确保后端服务器正常运行</li>
+                <li><strong>进入考勤日历</strong>：打开考勤日历页面</li>
+                <li><strong>开启编辑模式</strong>：点击编辑按钮</li>
+                <li><strong>修改考勤数据</strong>：修改某些员工的考勤状态</li>
+                <li><strong>保存修改</strong>：点击保存按钮</li>
+                <li><strong>验证入库</strong>：检查数据库中的记录是否更新</li>
+                <li><strong>查看日志</strong>：在编辑日志中查看修改记录</li>
+            </ol>
+        </div>
+
+        <h2>📋 相关API接口</h2>
+        
+        <div class="api-endpoint">
+        <strong>PUT</strong> /api/v1/attendance/daily/:companyId - 批量更新每日考勤
+        </div>
+        <div class="code-block">// 请求体
+{
+  "updates": [
+    {
+      "userId": "user123",
+      "date": "2025-01-15",
+      "status": "normal",
+      "onDutyTime": "09:00",
+      "offDutyTime": "18:30",
+      "records": [...],
+      "editReason": "考勤日历编辑修改",
+      "linkedProcInstId": "proc456"
+    }
+  ]
+}
+
+// 响应
+{
+  "code": 0,
+  "data": {
+    "updated": 15,
+    "editLogIds": [101, 102, 103, ...]
+  }
+}</div>
+
+        <div class="api-endpoint">
+        <strong>GET</strong> /api/v1/attendance/edit-logs/:companyId - 查看编辑日志
+        </div>
+        <div class="code-block">// 响应
+{
+  "code": 0,
+  "data": {
+    "total": 50,
+    "list": [
+      {
+        "id": 101,
+        "user_id": "user123",
+        "user_name": "张三",
+        "attendance_date": "2025-01-15",
+        "edit_type": "status",
+        "old_status": "incomplete",
+        "new_status": "normal",
+        "edit_reason": "考勤日历编辑修改",
+        "editor_id": "admin",
+        "editor_name": "管理员",
+        "edit_time": "2025-01-31T10:30:00Z"
+      }
+    ]
+  }
+}</div>
+
+        <h2>🔧 故障排除</h2>
+        
+        <div class="code-block">// 常见问题和解决方案
+
+1. "数据库保存失败"
+   → 检查服务器是否正常运行
+   → 检查网络连接
+   → 查看服务器日志
+
+2. "批量更新失败"
+   → 检查数据格式是否正确
+   → 确认公司ID和日期格式有效
+   → 查看具体错误信息
+
+3. "权限不足"
+   → 确认用户有编辑考勤数据的权限
+   → 检查请求头中的用户信息
+
+4. "本地缓存不一致"
+   → 清除本地缓存重新加载
+   → 刷新页面获取最新数据</div>
+
+        <div class="status success">
+            <strong>🎉 功能完成！</strong> 考勤日历编辑保存功能现在会正确将修改的数据入库到数据库，确保数据的持久化和一致性。用户的编辑操作会被完整记录，支持审计和追踪。
+        </div>
+    </div>
+</body>
+</html>

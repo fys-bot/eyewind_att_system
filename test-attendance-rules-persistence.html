@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤规则持久化测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; color: #155724; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+        .info { background-color: #d1ecf1; border-color: #bee5eb; color: #0c5460; }
+        .warning { background-color: #fff3cd; border-color: #ffeaa7; color: #856404; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+        .step { margin: 10px 0; padding: 10px; background: #f8f9fa; border-left: 4px solid #007bff; }
+        .result { margin: 10px 0; padding: 10px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>🔧 考勤规则持久化测试</h1>
+    <p>此测试验证考勤规则保存后是否能正确持久化到数据库，以及重新加载时是否能正确显示保存的配置。</p>
+
+    <div class="test-section info">
+        <h3>📋 测试步骤</h3>
+        <div class="step">1. 获取当前配置作为基准</div>
+        <div class="step">2. 修改配置并保存到数据库</div>
+        <div class="step">3. 清除前端缓存模拟页面刷新</div>
+        <div class="step">4. 重新从数据库加载配置</div>
+        <div class="step">5. 验证保存的配置是否正确加载</div>
+        <div class="step">6. 恢复原始配置</div>
+    </div>
+
+    <div class="test-section">
+        <h3>🎮 测试控制</h3>
+        <button onclick="runFullTest()" id="runTestBtn">开始完整测试</button>
+        <button onclick="clearResults()">清除结果</button>
+        <button onclick="getCurrentConfig()">仅获取当前配置</button>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000';
+        let originalConfig = null;
+        let testResults = [];
+
+        function addResult(message, type = 'info', data = null) {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            
+            let content = `<strong>[${new Date().toLocaleTimeString()}]</strong> ${message}`;
+            if (data) {
+                content += `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            }
+            
+            div.innerHTML = content;
+            results.appendChild(div);
+            
+            // 滚动到底部
+            div.scrollIntoView({ behavior: 'smooth' });
+            
+            testResults.push({ timestamp: new Date(), message, type, data });
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+            testResults = [];
+        }
+
+        async function apiRequest(endpoint, options = {}) {
+            const url = `${API_BASE}${endpoint}`;
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-user-id': 'test-user',
+                    'x-user-name': 'Test User'
+                }
+            };
+            
+            const response = await fetch(url, { ...defaultOptions, ...options });
+            const data = await response.json();
+            
+            if (data.code !== 0) {
+                throw new Error(data.message || `API 错误: ${data.code}`);
+            }
+            
+            return data.data;
+        }
+
+        async function getCurrentConfig() {
+            try {
+                addResult('📥 正在获取当前配置...');
+                const config = await apiRequest('/api/v1/attendance/rules/eyewind');
+                addResult(`✅ 成功获取配置 (版本: ${config.version})`, 'success');
+                addResult('当前配置详情:', 'info', {
+                    version: config.version,
+                    work_start_time: config.work_start_time,
+                    work_end_time: config.work_end_time,
+                    late_exemption_enabled: config.late_exemption_enabled,
+                    late_exemption_count: config.late_exemption_count,
+                    perf_penalty_enabled: config.perf_penalty_enabled,
+                    full_attend_enabled: config.full_attend_enabled,
+                    full_attend_bonus: config.full_attend_bonus
+                });
+                return config;
+            } catch (error) {
+                addResult(`❌ 获取配置失败: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+
+        async function saveTestConfig(changes) {
+            try {
+                addResult('💾 正在保存测试配置...', 'info', changes);
+                const result = await apiRequest('/api/v1/attendance/rules/eyewind', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        ...changes,
+                        changeReason: '自动化测试：验证配置持久化'
+                    })
+                });
+                addResult(`✅ 配置保存成功 (新版本: ${result.version})`, 'success');
+                return result;
+            } catch (error) {
+                addResult(`❌ 保存配置失败: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+
+        async function verifyConfigChanges(expectedChanges, actualConfig) {
+            addResult('🔍 正在验证配置更改...');
+            let allCorrect = true;
+            const verificationResults = {};
+
+            for (const [key, expectedValue] of Object.entries(expectedChanges)) {
+                const actualValue = actualConfig[key];
+                const isCorrect = actualValue == expectedValue || 
+                                (typeof expectedValue === 'string' && actualValue === expectedValue + ':00');
+                
+                verificationResults[key] = {
+                    expected: expectedValue,
+                    actual: actualValue,
+                    correct: isCorrect
+                };
+
+                if (!isCorrect) {
+                    allCorrect = false;
+                }
+            }
+
+            addResult('验证结果:', allCorrect ? 'success' : 'error', verificationResults);
+
+            if (allCorrect) {
+                addResult('🎉 所有配置更改都已正确保存和加载！', 'success');
+            } else {
+                addResult('⚠️ 部分配置更改未正确保存或加载', 'warning');
+            }
+
+            return allCorrect;
+        }
+
+        async function runFullTest() {
+            const runTestBtn = document.getElementById('runTestBtn');
+            runTestBtn.disabled = true;
+            runTestBtn.textContent = '测试进行中...';
+
+            try {
+                addResult('🚀 开始考勤规则持久化完整测试', 'info');
+                
+                // 步骤 1: 获取原始配置
+                addResult('📋 步骤 1: 获取原始配置');
+                originalConfig = await getCurrentConfig();
+                
+                // 步骤 2: 准备测试更改
+                addResult('📋 步骤 2: 准备测试更改');
+                const testChanges = {
+                    work_start_time: '08:45',  // 修改上班时间
+                    work_end_time: '17:45',    // 修改下班时间
+                    late_exemption_count: 5,   // 修改豁免次数
+                    full_attend_bonus: 300,    // 修改全勤奖金额
+                    perf_penalty_enabled: !originalConfig.perf_penalty_enabled  // 切换绩效扣款开关
+                };
+                
+                addResult('测试更改内容:', 'info', testChanges);
+                
+                // 步骤 3: 保存测试配置
+                addResult('📋 步骤 3: 保存测试配置到数据库');
+                await saveTestConfig(testChanges);
+                
+                // 步骤 4: 等待一下确保数据库写入完成
+                addResult('⏳ 等待数据库写入完成...');
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // 步骤 5: 重新加载配置验证持久化
+                addResult('📋 步骤 4: 重新从数据库加载配置验证持久化');
+                const reloadedConfig = await getCurrentConfig();
+                
+                // 步骤 6: 验证更改
+                addResult('📋 步骤 5: 验证配置更改是否正确持久化');
+                const isCorrect = await verifyConfigChanges(testChanges, reloadedConfig);
+                
+                // 步骤 7: 恢复原始配置
+                addResult('📋 步骤 6: 恢复原始配置');
+                await saveTestConfig({
+                    work_start_time: originalConfig.work_start_time.substring(0, 5),
+                    work_end_time: originalConfig.work_end_time.substring(0, 5),
+                    late_exemption_count: originalConfig.late_exemption_count,
+                    full_attend_bonus: originalConfig.full_attend_bonus,
+                    perf_penalty_enabled: originalConfig.perf_penalty_enabled
+                });
+                
+                // 最终结果
+                if (isCorrect) {
+                    addResult('🎊 测试完成：考勤规则持久化功能正常工作！', 'success');
+                } else {
+                    addResult('❌ 测试失败：考勤规则持久化存在问题', 'error');
+                }
+                
+            } catch (error) {
+                addResult(`💥 测试过程中发生错误: ${error.message}`, 'error');
+                
+                // 尝试恢复原始配置
+                if (originalConfig) {
+                    try {
+                        addResult('🔄 尝试恢复原始配置...');
+                        await saveTestConfig({
+                            work_start_time: originalConfig.work_start_time.substring(0, 5),
+                            work_end_time: originalConfig.work_end_time.substring(0, 5),
+                            late_exemption_count: originalConfig.late_exemption_count,
+                            full_attend_bonus: originalConfig.full_attend_bonus,
+                            perf_penalty_enabled: originalConfig.perf_penalty_enabled
+                        });
+                        addResult('✅ 原始配置已恢复', 'success');
+                    } catch (restoreError) {
+                        addResult(`❌ 恢复原始配置失败: ${restoreError.message}`, 'error');
+                    }
+                }
+            } finally {
+                runTestBtn.disabled = false;
+                runTestBtn.textContent = '开始完整测试';
+            }
+        }
+
+        // 页面加载时检查服务器连接
+        window.addEventListener('load', async () => {
+            try {
+                await fetch(`${API_BASE}/health`);
+                addResult('✅ 服务器连接正常', 'success');
+            } catch (error) {
+                addResult('❌ 无法连接到服务器，请确保后端服务正在运行', 'error');
+            }
+        });
+    </script>
+</body>
+</html>

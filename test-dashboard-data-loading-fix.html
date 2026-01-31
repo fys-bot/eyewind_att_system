@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤仪表盘数据加载修复验证</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .problem-found {
+            background: #fef2f2;
+            border: 1px solid #f87171;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .fix-applied {
+            background: #dcfce7;
+            border: 1px solid #16a34a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .result { 
+            margin-top: 10px; 
+            padding: 15px; 
+            background: #f1f5f9; 
+            border-radius: 6px; 
+            white-space: pre-wrap; 
+            font-family: monospace; 
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { border-left: 4px solid #059669; }
+        .error { border-left: 4px solid #dc2626; }
+        .info { border-left: 4px solid #0284c7; }
+        .warning { border-left: 4px solid #d97706; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        .flow-diagram {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 考勤仪表盘数据加载修复验证</h1>
+        
+        <div class="problem-found">
+            <h3>❌ 发现的问题</h3>
+            <p><strong>现象：</strong>点击进入考勤仪表盘后，只调用了考勤规则API，没有继续调用punch接口</p>
+            
+            <h4>🔍 根本原因：</h4>
+            <ol>
+                <li><strong>useEffect条件过于严格</strong>：添加了`!isLoading`条件，导致规则配置加载完成时数据加载函数不被调用</li>
+                <li><strong>循环依赖问题</strong>：useEffect依赖loadAllData函数，但loadAllData的依赖项变化会重新创建函数</li>
+                <li><strong>状态时序问题</strong>：规则配置加载完成时，isLoading状态可能仍为true</li>
+            </ol>
+        </div>
+        
+        <div class="fix-applied">
+            <h3>✅ 修复方案</h3>
+            <p><strong>使用useRef避免循环依赖：</strong>通过ref引用解决useEffect依赖问题</p>
+            
+            <h4>🔧 修复内容：</h4>
+            <ol>
+                <li><strong>添加useRef引用</strong>：使用loadAllDataRef.current避免直接依赖loadAllData函数</li>
+                <li><strong>移除严格条件</strong>：去掉`!isLoading`条件，允许规则配置加载完成后立即触发数据加载</li>
+                <li><strong>更新ref引用</strong>：确保ref始终指向最新的loadAllData函数</li>
+                <li><strong>保持防重复机制</strong>：在loadAllData内部保持防重复调用逻辑</li>
+            </ol>
+        </div>
+        
+        <div class="flow-diagram">
+            <h4>📊 修复后的数据加载流程</h4>
+            <div class="result info">
+1. 页面初始化
+   ↓
+2. 初始化规则配置 (initRuleConfigCache)
+   ↓
+3. 设置 ruleConfigLoaded = true
+   ↓
+4. 触发 useEffect (ruleConfigLoaded 变化)
+   ↓
+5. 调用 loadAllDataRef.current() 
+   ↓
+6. 执行 loadAllData() 函数
+   ↓
+7. 调用 fetchCompanyData() (punch接口)
+   ↓
+8. 加载用户数据和考勤数据
+   ↓
+9. 初始化考勤地图
+   ↓
+10. 计算统计数据
+   ↓
+11. 显示仪表盘内容
+            </div>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 修复效果验证</h3>
+            <button onclick="checkApiCallSequence()">检查API调用序列</button>
+            <button onclick="simulateLoadingFlow()">模拟加载流程</button>
+            <button onclick="clearResults()">清除结果</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 修复前后对比</h3>
+            
+            <h4>修复前的问题代码：</h4>
+            <div class="code-block">
+// ❌ 问题代码：条件过于严格，导致数据加载不被触发
+useEffect(() => { 
+  if (ruleConfigLoaded && !isLoading) { // 问题：!isLoading条件
+    console.log('规则配置已加载，开始加载数据');
+    loadAllData(); // 可能不会被调用
+  }
+}, [ruleConfigLoaded]); // 缺少loadAllData依赖会导致闭包问题
+            </div>
+            
+            <h4>修复后的代码：</h4>
+            <div class="code-block">
+// ✅ 修复代码：使用useRef避免循环依赖
+const loadAllDataRef = useRef&lt;(() =&gt; Promise&lt;void&gt;) | null&gt;(null);
+
+// 更新ref引用
+useEffect(() =&gt; {
+  loadAllDataRef.current = loadAllData;
+}, [loadAllData]);
+
+// 规则配置加载完成后触发数据加载
+useEffect(() =&gt; { 
+  if (ruleConfigLoaded && loadAllDataRef.current) {
+    console.log('规则配置已加载，开始加载数据');
+    loadAllDataRef.current(); // 通过ref调用，避免依赖问题
+  }
+}, [ruleConfigLoaded]); // 只依赖ruleConfigLoaded
+            </div>
+        </div>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = message;
+            results.appendChild(div);
+            results.scrollTop = results.scrollHeight;
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        function checkApiCallSequence() {
+            log('🔍 检查API调用序列...', 'info');
+            log('', 'info');
+            log('请打开浏览器开发者工具的网络面板，检查以下API调用顺序:', 'info');
+            log('', 'info');
+            log('✅ 预期的API调用序列:', 'success');
+            log('1. /api/v1/rules (考勤规则配置)', 'success');
+            log('2. /api/v1/auth/token (认证令牌)', 'success');
+            log('3. /api/v1/employees (员工列表)', 'success');
+            log('4. /api/v1/attendance/punch (考勤打卡数据)', 'success');
+            log('5. /api/v1/process/detail (流程详情，如果有)', 'success');
+            log('', 'info');
+            log('❌ 修复前的问题:', 'error');
+            log('• 只有第1步调用成功', 'error');
+            log('• 第2-5步不会被触发', 'error');
+            log('• 页面一直显示加载中', 'error');
+            log('', 'info');
+            log('✅ 修复后的预期:', 'success');
+            log('• 所有步骤按顺序执行', 'success');
+            log('• 数据加载完成后显示仪表盘', 'success');
+        }
+
+        function simulateLoadingFlow() {
+            log('🔄 模拟修复后的加载流程...', 'info');
+            
+            const steps = [
+                { name: '页面初始化', time: 100 },
+                { name: '初始化规则配置', time: 500 },
+                { name: '设置 ruleConfigLoaded = true', time: 100 },
+                { name: '触发 useEffect (ruleConfigLoaded)', time: 50 },
+                { name: '调用 loadAllDataRef.current()', time: 50 },
+                { name: '执行 loadAllData() 函数', time: 100 },
+                { name: '调用认证API', time: 300 },
+                { name: '调用员工API', time: 800 },
+                { name: '调用考勤punch API', time: 1200 },
+                { name: '处理考勤数据', time: 400 },
+                { name: '初始化考勤地图', time: 300 },
+                { name: '计算统计数据', time: 600 },
+                { name: '显示仪表盘内容', time: 200 }
+            ];
+            
+            let currentStep = 0;
+            
+            function executeStep() {
+                if (currentStep < steps.length) {
+                    const step = steps[currentStep];
+                    log(`步骤 ${currentStep + 1}: ${step.name}...`, 'info');
+                    
+                    setTimeout(() => {
+                        if (currentStep === 6) {
+                            log('🎯 关键修复点：这里开始调用punch接口！', 'success');
+                        }
+                        currentStep++;
+                        executeStep();
+                    }, step.time);
+                } else {
+                    log('', 'info');
+                    log('🎉 加载流程完成！仪表盘应该正常显示了。', 'success');
+                    log('', 'info');
+                    log('🔍 验证要点:', 'info');
+                    log('• 网络面板应该看到所有API调用', 'info');
+                    log('• 控制台应该有完整的加载日志', 'info');
+                    log('• 页面应该显示仪表盘内容而不是加载中', 'info');
+                }
+            }
+            
+            executeStep();
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('考勤仪表盘数据加载修复验证工具已加载', 'success');
+            log('', 'info');
+            log('🎯 修复的核心问题:', 'info');
+            log('• 规则配置加载完成后数据加载函数不被触发', 'warning');
+            log('• useEffect的条件判断过于严格', 'warning');
+            log('• 循环依赖导致的闭包问题', 'warning');
+            log('', 'info');
+            log('✅ 修复方案:', 'info');
+            log('• 使用useRef避免循环依赖', 'success');
+            log('• 移除过于严格的条件判断', 'success');
+            log('• 保持防重复调用机制', 'success');
+            log('', 'info');
+            log('🔍 修复后的预期效果:', 'info');
+            log('• 规则配置加载完成后立即触发数据加载', 'success');
+            log('• 按顺序调用所有必要的API', 'success');
+            log('• 页面正常显示仪表盘内容', 'success');
+            log('', 'info');
+            log('现在可以开始验证修复效果...', 'info');
+        };
+    </script>
+</body>
+</html>

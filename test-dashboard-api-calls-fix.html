@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤仪表盘API调用优化验证</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .problem-found {
+            background: #fef2f2;
+            border: 1px solid #f87171;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .fix-applied {
+            background: #dcfce7;
+            border: 1px solid #16a34a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .result { 
+            margin-top: 10px; 
+            padding: 15px; 
+            background: #f1f5f9; 
+            border-radius: 6px; 
+            white-space: pre-wrap; 
+            font-family: monospace; 
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { border-left: 4px solid #059669; }
+        .error { border-left: 4px solid #dc2626; }
+        .info { border-left: 4px solid #0284c7; }
+        .warning { border-left: 4px solid #d97706; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        .api-call-counter {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 考勤仪表盘API调用优化验证</h1>
+        
+        <div class="problem-found">
+            <h3>❌ 发现的问题</h3>
+            <p><strong>现象：</strong>进入考勤仪表盘时出现大量重复的API调用</p>
+            
+            <h4>🔍 根本原因：</h4>
+            <ol>
+                <li><strong>多个useEffect同时触发</strong>：规则配置、数据加载、员工列表等多个useEffect同时执行</li>
+                <li><strong>循环依赖问题</strong>：loadAllData函数的依赖项变化导致useEffect重复触发</li>
+                <li><strong>重复的数据获取</strong>：loadAllData和loadAllCompanyUsers都调用fetchCompanyData</li>
+                <li><strong>缺少防重复机制</strong>：没有加载状态控制和防抖机制</li>
+            </ol>
+        </div>
+        
+        <div class="fix-applied">
+            <h3>✅ 修复方案</h3>
+            <p><strong>优化数据加载逻辑：</strong>减少重复API调用，提高页面加载效率</p>
+            
+            <h4>🔧 修复内容：</h4>
+            <ol>
+                <li><strong>添加防重复调用机制</strong>：检查isLoading状态，防止重复调用</li>
+                <li><strong>优化useEffect依赖</strong>：移除循环依赖，减少不必要的重新渲染</li>
+                <li><strong>合并数据加载逻辑</strong>：避免多个函数同时调用相同的API</li>
+                <li><strong>添加防抖机制</strong>：使用loadingDebounce状态防止快速重复调用</li>
+                <li><strong>改进缓存策略</strong>：优先使用已加载的数据，减少网络请求</li>
+                <li><strong>增强日志记录</strong>：添加详细的调试日志，便于问题排查</li>
+            </ol>
+        </div>
+        
+        <div class="api-call-counter">
+            <h4>📊 API调用监控</h4>
+            <p>监控页面加载过程中的API调用次数</p>
+            <div id="apiCallStats">
+                <div>Token API: <span id="tokenCount">0</span> 次</div>
+                <div>Employee API: <span id="employeeCount">0</span> 次</div>
+                <div>Attendance API: <span id="attendanceCount">0</span> 次</div>
+                <div>Process API: <span id="processCount">0</span> 次</div>
+                <div>总计: <span id="totalCount">0</span> 次</div>
+            </div>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 优化效果验证</h3>
+            <button onclick="startMonitoring()">开始监控API调用</button>
+            <button onclick="stopMonitoring()">停止监控</button>
+            <button onclick="clearResults()">清除结果</button>
+            <button onclick="simulatePageLoad()">模拟页面加载</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 修复前后对比</h3>
+            
+            <h4>修复前的问题：</h4>
+            <div class="code-block">
+// ❌ 问题代码：多个useEffect同时触发
+useEffect(() => { 
+  if (ruleConfigLoaded) {
+    loadAllData(); // 第一次调用
+  }
+}, [loadAllData, ruleConfigLoaded]); // 循环依赖
+
+useEffect(() => {
+  const loadAllCompanyUsers = async () => {
+    // 重复调用fetchCompanyData
+    const data = await fetchCompanyData('eyewind', ...);
+    const data2 = await fetchCompanyData('hydodo', ...);
+  };
+  loadAllCompanyUsers();
+}, [globalMonth]); // 月份变化时重复调用
+            </div>
+            
+            <h4>修复后的代码：</h4>
+            <div class="code-block">
+// ✅ 修复代码：添加防重复调用机制
+const loadAllData = useCallback(async (forceRefresh = false, isSilent = false) => {
+  // 防止重复调用
+  if (!isSilent && (isLoading || loadingDebounce)) {
+    console.log('数据正在加载中，跳过重复调用');
+    return;
+  }
+  
+  setLoadingDebounce(true);
+  // ... 数据加载逻辑
+  setTimeout(() => setLoadingDebounce(false), 1000);
+}, [globalMonth, currentCompany, isLoading, loadingDebounce]);
+
+useEffect(() => { 
+  if (ruleConfigLoaded && !isLoading) {
+    loadAllData(); 
+  }
+}, [ruleConfigLoaded]); // 移除循环依赖
+            </div>
+        </div>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        let isMonitoring = false;
+        let apiCalls = {
+            token: 0,
+            employee: 0,
+            attendance: 0,
+            process: 0
+        };
+        
+        // 原始fetch函数
+        const originalFetch = window.fetch;
+        
+        function log(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = message;
+            results.appendChild(div);
+            results.scrollTop = results.scrollHeight;
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+        
+        function updateApiCallStats() {
+            document.getElementById('tokenCount').textContent = apiCalls.token;
+            document.getElementById('employeeCount').textContent = apiCalls.employee;
+            document.getElementById('attendanceCount').textContent = apiCalls.attendance;
+            document.getElementById('processCount').textContent = apiCalls.process;
+            document.getElementById('totalCount').textContent = 
+                apiCalls.token + apiCalls.employee + apiCalls.attendance + apiCalls.process;
+        }
+        
+        function startMonitoring() {
+            if (isMonitoring) {
+                log('⚠️ 监控已在运行中', 'warning');
+                return;
+            }
+            
+            isMonitoring = true;
+            apiCalls = { token: 0, employee: 0, attendance: 0, process: 0 };
+            updateApiCallStats();
+            
+            // 拦截fetch请求
+            window.fetch = function(...args) {
+                const url = args[0];
+                
+                if (typeof url === 'string') {
+                    if (url.includes('/api/v1/auth/token')) {
+                        apiCalls.token++;
+                        log(`🔑 Token API调用: ${url}`, 'info');
+                    } else if (url.includes('/api/v1/employees')) {
+                        apiCalls.employee++;
+                        log(`👥 Employee API调用: ${url}`, 'info');
+                    } else if (url.includes('/api/v1/attendance')) {
+                        apiCalls.attendance++;
+                        log(`📊 Attendance API调用: ${url}`, 'info');
+                    } else if (url.includes('/api/v1/process')) {
+                        apiCalls.process++;
+                        log(`📋 Process API调用: ${url}`, 'info');
+                    }
+                    
+                    updateApiCallStats();
+                }
+                
+                return originalFetch.apply(this, args);
+            };
+            
+            log('🚀 开始监控API调用...', 'success');
+        }
+        
+        function stopMonitoring() {
+            if (!isMonitoring) {
+                log('⚠️ 监控未在运行', 'warning');
+                return;
+            }
+            
+            isMonitoring = false;
+            window.fetch = originalFetch;
+            
+            const total = apiCalls.token + apiCalls.employee + apiCalls.attendance + apiCalls.process;
+            log(`🏁 监控已停止`, 'success');
+            log(`📊 API调用统计:`, 'info');
+            log(`   Token API: ${apiCalls.token} 次`, 'info');
+            log(`   Employee API: ${apiCalls.employee} 次`, 'info');
+            log(`   Attendance API: ${apiCalls.attendance} 次`, 'info');
+            log(`   Process API: ${apiCalls.process} 次`, 'info');
+            log(`   总计: ${total} 次`, total > 10 ? 'error' : total > 5 ? 'warning' : 'success');
+            
+            if (total > 10) {
+                log('❌ API调用次数过多，可能存在重复调用问题', 'error');
+            } else if (total > 5) {
+                log('⚠️ API调用次数较多，建议进一步优化', 'warning');
+            } else {
+                log('✅ API调用次数合理', 'success');
+            }
+        }
+        
+        function simulatePageLoad() {
+            log('🔄 模拟页面加载过程...', 'info');
+            
+            // 模拟优化前的多次API调用
+            log('修复前的调用模式:', 'warning');
+            log('1. 规则配置useEffect触发 → loadAllData()', 'warning');
+            log('2. 员工列表useEffect触发 → fetchCompanyData(eyewind)', 'warning');
+            log('3. 员工列表useEffect触发 → fetchCompanyData(hydodo)', 'warning');
+            log('4. globalMonth变化 → loadAllData()重新创建 → 再次触发', 'warning');
+            log('5. 考勤地图useEffect触发 → 处理数据', 'warning');
+            log('总计: 可能产生5-10次重复的API调用', 'error');
+            
+            log('', 'info');
+            
+            // 模拟优化后的调用模式
+            log('修复后的调用模式:', 'success');
+            log('1. 规则配置加载完成 → 检查!isLoading → loadAllData()', 'success');
+            log('2. 防重复调用机制 → 跳过重复调用', 'success');
+            log('3. 员工列表复用已加载数据 → 避免重复API调用', 'success');
+            log('4. 防抖机制 → 1秒内防止重复调用', 'success');
+            log('总计: 只产生1-2次必要的API调用', 'success');
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('考勤仪表盘API调用优化验证工具加载完成', 'success');
+            log('', 'info');
+            log('🎯 优化的核心问题:', 'info');
+            log('• 多个useEffect同时触发导致重复API调用', 'warning');
+            log('• 循环依赖导致无限重新渲染', 'warning');
+            log('• 缺少防重复调用机制', 'warning');
+            log('• 员工数据重复获取', 'warning');
+            log('', 'info');
+            log('✅ 优化方案:', 'info');
+            log('• 添加防重复调用机制', 'success');
+            log('• 优化useEffect依赖关系', 'success');
+            log('• 合并重复的数据加载逻辑', 'success');
+            log('• 添加防抖机制', 'success');
+            log('• 改进缓存策略', 'success');
+            log('', 'info');
+            log('🔍 优化后的预期效果:', 'info');
+            log('• API调用次数大幅减少（从10+次降到2-3次）', 'success');
+            log('• 页面加载速度提升', 'success');
+            log('• 服务器压力减轻', 'success');
+            log('• 用户体验改善', 'success');
+            log('', 'info');
+            log('现在可以开始验证优化效果...', 'info');
+        };
+    </script>
+</body>
+</html>

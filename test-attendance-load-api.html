@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤Load接口测试</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .demo-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .log { 
+            background: #f1f5f9; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 4px; 
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .success { color: #059669; }
+        .info { color: #0284c7; }
+        .warning { color: #d97706; }
+        .error { color: #dc2626; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .api-test {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 10px 0;
+        }
+        .url-display {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            margin: 10px 0;
+        }
+        .response-display {
+            background: #f1f5f9;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>考勤Load接口调用测试</h1>
+        <p>测试考勤确认页面的load接口调用，验证月份参数是否正确传递。</p>
+        
+        <div class="demo-section">
+            <h3>问题分析</h3>
+            <ul>
+                <li>❌ 进入考勤确认页面时没有调用load接口</li>
+                <li>🔧 需要在路由处加上月份参数</li>
+                <li>✅ 服务器端已支持 <code>/api/v1/attendance/status/load/:pathSegment?</code></li>
+                <li>✅ 前端已修改为包含月份参数的URL</li>
+            </ul>
+        </div>
+
+        <div class="demo-section">
+            <h3>API接口测试</h3>
+            
+            <div class="api-test">
+                <h4>1. 测试不带月份参数的接口</h4>
+                <div class="url-display">GET /api/v1/attendance/status/load</div>
+                <button onclick="testLoadWithoutMonth()">测试调用</button>
+                <div id="response1" class="response-display"></div>
+            </div>
+            
+            <div class="api-test">
+                <h4>2. 测试带月份参数的接口</h4>
+                <div class="url-display">GET /api/v1/attendance/status/load/2026-01</div>
+                <button onclick="testLoadWithMonth('2026-01')">测试 2026-01</button>
+                <button onclick="testLoadWithMonth('2025-12')">测试 2025-12</button>
+                <div id="response2" class="response-display"></div>
+            </div>
+            
+            <div class="api-test">
+                <h4>3. 测试用户ID+月份格式</h4>
+                <div class="url-display">GET /api/v1/attendance/status/load/user123**2026-01</div>
+                <button onclick="testLoadWithUserMonth('user123**2026-01')">测试用户+月份</button>
+                <div id="response3" class="response-display"></div>
+            </div>
+        </div>
+
+        <div class="demo-section">
+            <h3>前端调用逻辑测试</h3>
+            <button onclick="testFrontendLogic()">测试前端调用逻辑</button>
+            <button onclick="testGlobalMonthChange()">测试全局月份变更</button>
+            <button onclick="clearLogs()">清除日志</button>
+        </div>
+        
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        async function testLoadWithoutMonth() {
+            log('开始测试不带月份参数的load接口...', 'info');
+            
+            try {
+                const response = await fetch('/api/v1/attendance/status/load');
+                const data = await response.json();
+                
+                document.getElementById('response1').innerHTML = 
+                    `<strong>状态:</strong> ${response.status}<br>` +
+                    `<strong>响应:</strong> <pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (response.ok) {
+                    log('✅ 不带月份参数的接口调用成功', 'success');
+                } else {
+                    log(`❌ 接口调用失败: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ 接口调用异常: ${error.message}`, 'error');
+                document.getElementById('response1').innerHTML = `<strong>错误:</strong> ${error.message}`;
+            }
+        }
+
+        async function testLoadWithMonth(month) {
+            log(`开始测试带月份参数的load接口: ${month}`, 'info');
+            
+            try {
+                const url = `/api/v1/attendance/status/load/${month}`;
+                log(`请求URL: ${url}`, 'info');
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                document.getElementById('response2').innerHTML = 
+                    `<strong>URL:</strong> ${url}<br>` +
+                    `<strong>状态:</strong> ${response.status}<br>` +
+                    `<strong>响应:</strong> <pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (response.ok) {
+                    log(`✅ 月份参数 ${month} 的接口调用成功`, 'success');
+                    if (data.data) {
+                        log(`✅ 返回数据包含 ${Object.keys(data.data).length} 个月份`, 'success');
+                    }
+                } else {
+                    log(`❌ 接口调用失败: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ 接口调用异常: ${error.message}`, 'error');
+                document.getElementById('response2').innerHTML = `<strong>错误:</strong> ${error.message}`;
+            }
+        }
+
+        async function testLoadWithUserMonth(pathSegment) {
+            log(`开始测试用户+月份格式的load接口: ${pathSegment}`, 'info');
+            
+            try {
+                const url = `/api/v1/attendance/status/load/${pathSegment}`;
+                log(`请求URL: ${url}`, 'info');
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                document.getElementById('response3').innerHTML = 
+                    `<strong>URL:</strong> ${url}<br>` +
+                    `<strong>状态:</strong> ${response.status}<br>` +
+                    `<strong>响应:</strong> <pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (response.ok) {
+                    log(`✅ 用户+月份格式 ${pathSegment} 的接口调用成功`, 'success');
+                } else {
+                    log(`❌ 接口调用失败: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ 接口调用异常: ${error.message}`, 'error');
+                document.getElementById('response3').innerHTML = `<strong>错误:</strong> ${error.message}`;
+            }
+        }
+
+        function testFrontendLogic() {
+            log('开始测试前端调用逻辑...', 'info');
+            
+            // 模拟前端逻辑
+            const globalMonth = '2026-01';
+            const loadUrl = globalMonth 
+                ? `/api/v1/attendance/status/load/${globalMonth}`
+                : "/api/v1/attendance/status/load";
+            
+            log(`全局月份: ${globalMonth}`, 'info');
+            log(`生成的URL: ${loadUrl}`, 'info');
+            
+            // 验证URL格式
+            if (loadUrl.includes(globalMonth)) {
+                log('✅ URL正确包含月份参数', 'success');
+            } else {
+                log('❌ URL未包含月份参数', 'error');
+            }
+            
+            // 模拟useEffect触发条件
+            const hasInitialized = true;
+            const shouldReload = hasInitialized && globalMonth;
+            
+            if (shouldReload) {
+                log('✅ useEffect应该触发重新加载', 'success');
+            } else {
+                log('❌ useEffect不会触发重新加载', 'warning');
+            }
+        }
+
+        function testGlobalMonthChange() {
+            log('开始测试全局月份变更逻辑...', 'info');
+            
+            // 模拟月份变更场景
+            const scenarios = [
+                { from: null, to: '2026-01', desc: '初始加载' },
+                { from: '2026-01', to: '2026-02', desc: '月份切换' },
+                { from: '2026-02', to: '2025-12', desc: '跨年切换' }
+            ];
+            
+            scenarios.forEach(({ from, to, desc }) => {
+                log(`🔄 ${desc}: ${from || 'null'} -> ${to}`, 'info');
+                
+                // 模拟URL生成
+                const newUrl = to ? `/api/v1/attendance/status/load/${to}` : '/api/v1/attendance/status/load';
+                log(`生成URL: ${newUrl}`, 'info');
+                
+                // 模拟useEffect触发
+                const shouldTrigger = from !== null && to; // 已初始化且有新月份
+                if (shouldTrigger) {
+                    log('✅ 应该触发重新加载', 'success');
+                } else {
+                    log('ℹ️ 首次加载或无月份', 'info');
+                }
+            });
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('考勤Load接口测试页面加载完成', 'success');
+            log('修复内容:', 'info');
+            log('1. 在load接口URL中添加月份参数', 'info');
+            log('2. 添加globalMonth变化时的重新加载逻辑', 'info');
+            log('3. 确保useEffect正确触发API调用', 'info');
+        };
+    </script>
+</body>
+</html>

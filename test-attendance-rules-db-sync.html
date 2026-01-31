@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤规则页面数据库同步测试</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f8fafc;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+        }
+        .test-section {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .test-section h3 {
+            margin: 0 0 12px 0;
+            color: #1e293b;
+            font-size: 16px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .status.implemented { background: #dcfce7; color: #166534; }
+        .status.requirement { background: #fef3c7; color: #92400e; }
+        .code-block {
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            margin: 8px 0;
+            overflow-x: auto;
+        }
+        .highlight {
+            background: #fef3c7;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+        .change-log {
+            background: #f0f9ff;
+            border-left: 4px solid #0ea5e9;
+            padding: 12px;
+            margin: 12px 0;
+        }
+        .test-steps {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 16px;
+            margin: 16px 0;
+        }
+        .test-steps ol {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .test-steps li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+        .flow-diagram {
+            background: #f8fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 16px 0;
+            text-align: center;
+        }
+        .flow-step {
+            display: inline-block;
+            background: #3b82f6;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            margin: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .flow-arrow {
+            display: inline-block;
+            margin: 0 8px;
+            color: #64748b;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔄 考勤规则页面数据库同步功能</h1>
+        <p>每次进入考勤规则页面都从数据库加载最新配置并同步到规则引擎</p>
+    </div>
+
+    <div class="container">
+        <h2>📋 需求说明</h2>
+        
+        <div class="test-section">
+            <h3>用户需求 <span class="status requirement">REQUIREMENT</span></h3>
+            <p><strong>原始需求：</strong>"每次进来考勤规则页面都要去请求一下接口，然后将数据库里面的规则结果同步上去"</p>
+            
+            <p><strong>需求解析：</strong></p>
+            <ul>
+                <li>每次进入考勤规则配置页面时，都要主动从数据库API获取最新的规则配置</li>
+                <li>将获取到的数据库规则同步到前端的规则引擎中</li>
+                <li>确保页面显示的规则配置始终是数据库中的最新版本</li>
+                <li>避免因缓存或本地存储导致的规则不一致问题</li>
+            </ul>
+        </div>
+
+        <div class="test-section">
+            <h3>业务价值</h3>
+            <ul>
+                <li><strong>数据一致性：</strong>确保多用户环境下规则配置的一致性</li>
+                <li><strong>实时性：</strong>管理员修改规则后，其他用户能立即看到最新配置</li>
+                <li><strong>可靠性：</strong>以数据库为准，避免本地缓存导致的数据不一致</li>
+                <li><strong>审计性：</strong>所有规则变更都有数据库记录，便于追溯</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🔧 实现方案</h2>
+
+        <div class="flow-diagram">
+            <h3 style="margin-top: 0;">数据同步流程</h3>
+            <div style="margin: 20px 0;">
+                <span class="flow-step">进入页面</span>
+                <span class="flow-arrow">→</span>
+                <span class="flow-step">调用数据库API</span>
+                <span class="flow-arrow">→</span>
+                <span class="flow-step">转换数据格式</span>
+                <span class="flow-arrow">→</span>
+                <span class="flow-step">更新前端状态</span>
+                <span class="flow-arrow">→</span>
+                <span class="flow-step">同步规则引擎</span>
+                <span class="flow-arrow">→</span>
+                <span class="flow-step">显示最新配置</span>
+            </div>
+        </div>
+
+        <div class="change-log">
+            <h3>核心修改 1：强制数据库加载</h3>
+            <div class="code-block">
+// ✅ 修改前：只在组件首次挂载时加载
+useEffect(() => {
+  if (!hasInitialized || !isCurrentlyLoading) {
+    loadConfigFromDatabase();
+  }
+}, [selectedCompany, loadConfigFromDatabase, hasInitialized, isCurrentlyLoading]);
+
+// 🔥 修改后：每次进入页面都强制从数据库加载
+useEffect(() => {
+  console.log(`🔥 每次进入页面都强制从数据库加载 ${selectedCompany} 配置`);
+  
+  // 重置初始化状态，强制重新加载
+  <span class="highlight">setHasInitialized(false);</span>
+  <span class="highlight">setIsCurrentlyLoading(false);</span>
+  
+  // 立即从数据库加载配置
+  <span class="highlight">loadConfigFromDatabase();</span>
+}, [selectedCompany, loadConfigFromDatabase]); // 每次公司切换或组件挂载都重新加载
+            </div>
+        </div>
+
+        <div class="change-log">
+            <h3>核心修改 2：增强数据库加载逻辑</h3>
+            <div class="code-block">
+const loadConfigFromDatabase = useCallback(async () => {
+  try {
+    console.log(`🔥 强制从数据库加载 ${selectedCompany} 的最新配置`);
+    
+    // 🔥 强制从数据库获取最新配置（不使用缓存）
+    const dbConfig = await attendanceRuleApiService.getFullConfig(selectedCompany, <span class="highlight">true</span>);
+    
+    if (dbConfig) {
+      // 转换数据格式
+      const frontendConfig = convertDbConfigToFrontend(dbConfig, selectedCompany);
+      
+      // 更新前端状态
+      setFormData({ rules: { ...frontendConfig } });
+      
+      // 🔥 重要：同步到规则引擎，确保全局规则立即生效
+      const { AttendanceRuleManager } = await import('../attendance/AttendanceRuleEngine.ts');
+      const { refreshRuleConfigCache } = await import('../attendance/utils.ts');
+      
+      <span class="highlight">// 刷新规则配置缓存</span>
+      <span class="highlight">await refreshRuleConfigCache(selectedCompany);</span>
+      
+      <span class="highlight">// 重新加载规则引擎</span>
+      <span class="highlight">AttendanceRuleManager.reloadAllRules();</span>
+      
+      console.log(`🔥 规则引擎已同步更新 ${selectedCompany} 的规则`);
+    }
+  } catch (error) {
+    console.error('从数据库加载配置失败:', error);
+  }
+}, [selectedCompany]);
+            </div>
+        </div>
+
+        <div class="change-log">
+            <h3>核心修改 3：组件挂载时立即初始化</h3>
+            <div class="code-block">
+// 🔥 组件挂载时立即设置为已挂载状态
+useEffect(() => {
+  isMountedRef.current = true;
+  console.log('[AttendanceRules] 🔥 组件挂载，准备加载数据库配置');
+  
+  return () => {
+    isMountedRef.current = false;
+    console.log('[AttendanceRules] 组件卸载');
+  };
+}, []);
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🧪 测试验证</h2>
+        
+        <div class="test-steps">
+            <h3>测试步骤</h3>
+            <ol>
+                <li><strong>基础功能测试</strong>
+                    <ul>
+                        <li>打开考勤规则配置页面</li>
+                        <li>观察浏览器控制台，应该看到数据库加载日志</li>
+                        <li>确认页面显示的是数据库中的最新配置</li>
+                    </ul>
+                </li>
+                
+                <li><strong>公司切换测试</strong>
+                    <ul>
+                        <li>在页面上切换公司（风眼 ↔ 海多多）</li>
+                        <li>每次切换都应该重新从数据库加载对应公司的配置</li>
+                        <li>检查控制台日志确认加载过程</li>
+                    </ul>
+                </li>
+                
+                <li><strong>页面重新进入测试</strong>
+                    <ul>
+                        <li>离开考勤规则页面，导航到其他页面</li>
+                        <li>再次进入考勤规则页面</li>
+                        <li>确认重新进入时会再次从数据库加载配置</li>
+                    </ul>
+                </li>
+                
+                <li><strong>规则引擎同步测试</strong>
+                    <ul>
+                        <li>在数据库中修改某个公司的规则配置</li>
+                        <li>进入考勤规则页面</li>
+                        <li>确认页面显示最新配置</li>
+                        <li>进入考勤仪表盘，确认规则引擎使用最新规则</li>
+                    </ul>
+                </li>
+                
+                <li><strong>多用户协作测试</strong>
+                    <ul>
+                        <li>用户A修改并保存规则配置</li>
+                        <li>用户B进入考勤规则页面</li>
+                        <li>确认用户B看到的是用户A修改后的最新配置</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+
+        <div class="test-section">
+            <h3>预期结果 <span class="status implemented">IMPLEMENTED</span></h3>
+            <ul>
+                <li>✅ 每次进入页面都会从数据库重新加载配置</li>
+                <li>✅ 切换公司时会加载对应公司的最新配置</li>
+                <li>✅ 规则引擎会同步更新，确保全局一致性</li>
+                <li>✅ 控制台显示详细的加载和同步日志</li>
+                <li>✅ 页面显示成功加载的提示信息</li>
+            </ul>
+        </div>
+
+        <div class="test-section">
+            <h3>关键日志输出</h3>
+            <p>实现后，在浏览器控制台应该能看到以下日志：</p>
+            <div class="code-block">
+[AttendanceRules] 🔥 组件挂载，准备加载数据库配置
+[AttendanceRules] 🔥 每次进入页面都强制从数据库加载 eyewind 配置
+[AttendanceRules] 🔥 强制从数据库加载 eyewind 的最新配置
+[AttendanceRules] ✅ 成功从数据库加载 eyewind 配置
+[AttendanceRules] 🔥 规则引擎已同步更新 eyewind 的规则
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>🔄 数据流程图</h2>
+        
+        <div class="test-section">
+            <h3>完整的数据同步流程</h3>
+            <div style="background: #f8fafc; padding: 20px; border-radius: 8px; font-family: monospace; font-size: 12px; line-height: 1.6;">
+<pre>
+1. 用户进入考勤规则页面
+   ↓
+2. useEffect 触发 (每次都执行)
+   ↓
+3. 重置加载状态
+   ├─ setHasInitialized(false)
+   └─ setIsCurrentlyLoading(false)
+   ↓
+4. 调用 loadConfigFromDatabase()
+   ↓
+5. 请求数据库 API
+   ├─ attendanceRuleApiService.getFullConfig(company, true)
+   └─ 参数 true 表示强制刷新，不使用缓存
+   ↓
+6. 数据格式转换
+   ├─ convertDbConfigToFrontend(dbConfig, company)
+   └─ 将数据库格式转换为前端组件格式
+   ↓
+7. 更新前端状态
+   ├─ setFormData({ rules: frontendConfig })
+   └─ setStoredConfigs() // 更新本地存储备份
+   ↓
+8. 同步到规则引擎 🔥
+   ├─ refreshRuleConfigCache(company)
+   └─ AttendanceRuleManager.reloadAllRules()
+   ↓
+9. 显示成功提示
+   └─ "✅ 已从数据库重新加载配置并同步到规则引擎"
+</pre>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>与其他模块的协作</h3>
+            <ul>
+                <li><strong>考勤仪表盘：</strong>规则引擎更新后，仪表盘的计算逻辑会立即使用最新规则</li>
+                <li><strong>考勤确认：</strong>确认单生成时会使用最新的规则进行计算</li>
+                <li><strong>考勤日历：</strong>日历编辑功能会基于最新规则进行验证</li>
+                <li><strong>缓存系统：</strong>相关缓存会被清理，确保数据一致性</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="container" style="background: #f0f9ff; border: 1px solid #0ea5e9;">
+        <h2 style="color: #0369a1;">🎯 实现完成</h2>
+        <p><strong>功能状态：</strong> <span class="status implemented">已实现</span></p>
+        <p><strong>核心特性：</strong></p>
+        <ul>
+            <li>✅ 每次进入页面都强制从数据库加载最新规则配置</li>
+            <li>✅ 自动同步到规则引擎，确保全局规则一致性</li>
+            <li>✅ 支持公司切换时的配置重新加载</li>
+            <li>✅ 完善的错误处理和用户反馈</li>
+            <li>✅ 详细的调试日志，便于问题排查</li>
+        </ul>
+        <p><strong>影响范围：</strong> 考勤规则配置页面的数据加载机制</p>
+        <p><strong>修改文件：</strong> <code>components/settings/AttendanceRules.tsx</code></p>
+        <p><strong>测试建议：</strong> 重点测试多用户协作场景和规则引擎同步效果</p>
+    </div>
+
+    <script>
+        // 添加一些交互效果
+        document.querySelectorAll('.test-section').forEach(section => {
+            section.addEventListener('click', function() {
+                this.style.backgroundColor = this.style.backgroundColor === 'rgb(240, 249, 255)' ? '' : '#f0f9ff';
+            });
+        });
+
+        // 显示当前时间
+        const now = new Date();
+        console.log(`测试页面加载时间: ${now.toLocaleString('zh-CN')}`);
+    </script>
+</body>
+</html>

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>考勤仪表盘加载状态调试</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .debug-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .result { 
+            margin-top: 10px; 
+            padding: 15px; 
+            background: #f1f5f9; 
+            border-radius: 6px; 
+            white-space: pre-wrap; 
+            font-family: monospace; 
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { border-left: 4px solid #059669; }
+        .error { border-left: 4px solid #dc2626; }
+        .info { border-left: 4px solid #0284c7; }
+        .warning { border-left: 4px solid #d97706; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-loading { background: #f59e0b; }
+        .status-success { background: #059669; }
+        .status-error { background: #dc2626; }
+        .checklist {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 考勤仪表盘加载状态调试</h1>
+        
+        <div class="checklist">
+            <h3>📋 加载状态检查清单</h3>
+            <div id="loadingChecklist">
+                <div><span class="status-indicator status-loading"></span>规则配置加载 (ruleConfigLoaded)</div>
+                <div><span class="status-indicator status-loading"></span>用户数据加载 (allUsers.length > 0)</div>
+                <div><span class="status-indicator status-loading"></span>考勤地图初始化 (attendanceMap)</div>
+                <div><span class="status-indicator status-loading"></span>统计数据计算 (companyEmployeeStats)</div>
+                <div><span class="status-indicator status-loading"></span>基础加载状态 (!isLoading && !isRefreshing)</div>
+            </div>
+        </div>
+        
+        <div class="debug-section">
+            <h3>🧪 调试工具</h3>
+            <button onclick="checkConsoleLog()">检查控制台日志</button>
+            <button onclick="simulateLoadingSteps()">模拟加载步骤</button>
+            <button onclick="analyzeLoadingIssues()">分析加载问题</button>
+            <button onclick="clearResults()">清除结果</button>
+        </div>
+        
+        <div class="debug-section">
+            <h3>🔧 可能的问题和解决方案</h3>
+            <div class="result info">
+常见的加载卡住原因：
+
+1. 🔄 规则配置加载失败
+   - 检查: initRuleConfigCache() 是否成功
+   - 解决: 查看网络请求是否正常
+
+2. 📊 API数据获取失败
+   - 检查: fetchCompanyData() 是否返回数据
+   - 解决: 查看API响应状态和数据格式
+
+3. 🗺️ 考勤地图初始化卡住
+   - 检查: allUsers 是否有 punchData
+   - 解决: 确认用户数据包含考勤记录
+
+4. 📈 统计数据计算异常
+   - 检查: useAttendanceStats 是否返回数据
+   - 解决: 查看统计计算的输入参数
+
+5. 🔒 加载状态判断过于严格
+   - 检查: isDataLoading 的判断条件
+   - 解决: 放宽某些检查条件
+            </div>
+        </div>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${type}`;
+            div.innerHTML = message;
+            results.appendChild(div);
+            results.scrollTop = results.scrollHeight;
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+        
+        function updateChecklistItem(index, status) {
+            const items = document.querySelectorAll('#loadingChecklist .status-indicator');
+            if (items[index]) {
+                items[index].className = `status-indicator status-${status}`;
+            }
+        }
+
+        function checkConsoleLog() {
+            log('🔍 检查控制台日志...', 'info');
+            log('', 'info');
+            log('请打开浏览器开发者工具的控制台，查找以下关键日志:', 'info');
+            log('', 'info');
+            log('1. [AttendanceDashboardPage] 规则配置缓存已初始化', 'info');
+            log('2. [AttendanceDashboardPage] 规则配置已加载，开始加载数据', 'info');
+            log('3. [AttendanceDashboardPage] 从API加载数据: eyewind/hydodo', 'info');
+            log('4. [AttendanceDashboardPage] 数据加载完成: X 个用户', 'info');
+            log('5. [AttendanceDashboardPage] 开始初始化考勤地图: X 个用户', 'info');
+            log('6. [AttendanceDashboardPage] 考勤地图初始化完成: X 个用户', 'info');
+            log('7. [AttendanceDashboardPage] 检查数据加载状态: {...}', 'info');
+            log('', 'info');
+            log('如果某个步骤的日志没有出现，说明在该步骤卡住了。', 'warning');
+        }
+
+        function simulateLoadingSteps() {
+            log('🔄 模拟加载步骤...', 'info');
+            
+            let step = 0;
+            const steps = [
+                { name: '初始化规则配置', time: 500 },
+                { name: '加载用户数据', time: 1000 },
+                { name: '初始化考勤地图', time: 800 },
+                { name: '计算统计数据', time: 1200 },
+                { name: '完成加载', time: 200 }
+            ];
+            
+            function nextStep() {
+                if (step < steps.length) {
+                    const currentStep = steps[step];
+                    log(`步骤 ${step + 1}: ${currentStep.name}...`, 'info');
+                    updateChecklistItem(step, 'success');
+                    
+                    setTimeout(() => {
+                        step++;
+                        nextStep();
+                    }, currentStep.time);
+                } else {
+                    log('✅ 所有步骤完成！', 'success');
+                }
+            }
+            
+            nextStep();
+        }
+
+        function analyzeLoadingIssues() {
+            log('🔍 分析可能的加载问题...', 'info');
+            log('', 'info');
+            
+            // 模拟不同的问题场景
+            const issues = [
+                {
+                    name: '规则配置加载失败',
+                    symptoms: ['页面一直显示加载中', '控制台没有"规则配置缓存已初始化"日志'],
+                    causes: ['网络请求失败', 'API服务器异常', '配置文件格式错误'],
+                    solutions: ['检查网络连接', '重启服务器', '验证配置文件格式']
+                },
+                {
+                    name: 'API数据获取失败',
+                    symptoms: ['有规则配置日志但没有数据加载日志', '网络面板显示API请求失败'],
+                    causes: ['API服务器宕机', '认证失败', '参数错误'],
+                    solutions: ['检查API服务器状态', '验证认证信息', '检查请求参数']
+                },
+                {
+                    name: '考勤地图初始化卡住',
+                    symptoms: ['有用户数据但没有考勤地图日志', '用户数据没有punchData'],
+                    causes: ['用户数据格式错误', '考勤记录为空', '日期计算异常'],
+                    solutions: ['检查用户数据结构', '验证考勤记录', '检查日期处理逻辑']
+                },
+                {
+                    name: '统计数据计算异常',
+                    symptoms: ['有考勤地图但统计数据为空', 'useAttendanceStats返回空对象'],
+                    causes: ['统计计算逻辑错误', '数据格式不匹配', '规则引擎异常'],
+                    solutions: ['检查统计计算逻辑', '验证数据格式', '重置规则引擎']
+                },
+                {
+                    name: '加载状态判断过于严格',
+                    symptoms: ['所有数据都有但仍显示加载中', 'isDataLoading始终为true'],
+                    causes: ['判断条件过于严格', '某个条件永远不满足', '状态更新异常'],
+                    solutions: ['放宽判断条件', '添加调试日志', '检查状态更新逻辑']
+                }
+            ];
+            
+            issues.forEach((issue, index) => {
+                log(`问题 ${index + 1}: ${issue.name}`, 'warning');
+                log(`症状: ${issue.symptoms.join(', ')}`, 'info');
+                log(`可能原因: ${issue.causes.join(', ')}`, 'info');
+                log(`解决方案: ${issue.solutions.join(', ')}`, 'success');
+                log('', 'info');
+            });
+            
+            log('🔧 调试建议:', 'info');
+            log('1. 按顺序检查每个加载步骤的日志', 'info');
+            log('2. 在卡住的步骤添加更多调试信息', 'info');
+            log('3. 检查网络面板的API请求状态', 'info');
+            log('4. 验证数据格式和结构', 'info');
+            log('5. 考虑放宽加载状态的判断条件', 'info');
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('考勤仪表盘加载状态调试工具已加载', 'success');
+            log('', 'info');
+            log('🎯 调试目标:', 'info');
+            log('• 找出页面一直加载中的原因', 'warning');
+            log('• 确定是缓存问题还是数据匹配问题', 'warning');
+            log('• 提供具体的解决方案', 'warning');
+            log('', 'info');
+            log('🔍 调试方法:', 'info');
+            log('• 检查控制台日志找出卡住的步骤', 'success');
+            log('• 分析可能的问题原因', 'success');
+            log('• 验证数据加载和处理流程', 'success');
+            log('', 'info');
+            log('现在可以开始调试...', 'info');
+        };
+    </script>
+</body>
+</html>

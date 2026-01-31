@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试重复API调用修复</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .log { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .success { color: green; }
+        .error { color: red; }
+        .warning { color: orange; }
+        button { padding: 10px 20px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>测试重复API调用修复</h1>
+    <p>这个测试页面用于验证考勤页面的重复API调用问题是否已经修复。</p>
+    
+    <div>
+        <button onclick="testTokenCache()">测试Token缓存</button>
+        <button onclick="testEmployeeCache()">测试员工数据缓存</button>
+        <button onclick="testAttendanceAPI()">测试考勤API</button>
+        <button onclick="clearLogs()">清除日志</button>
+    </div>
+    
+    <div id="logs"></div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        // 模拟获取配置的函数
+        function getAppConfig(mainCompany) {
+            return {
+                appkey: 'test_key',
+                appsecret: 'test_secret',
+                agent_id: 'test_agent'
+            };
+        }
+
+        // 测试Token缓存
+        async function testTokenCache() {
+            log('开始测试Token缓存...', 'info');
+            
+            const startTime = Date.now();
+            
+            // 连续调用3次，应该只有第一次真正发起请求
+            const promises = [];
+            for (let i = 0; i < 3; i++) {
+                promises.push(fetchTokenTest('eyewind', i + 1));
+            }
+            
+            try {
+                const results = await Promise.all(promises);
+                const endTime = Date.now();
+                
+                log(`Token缓存测试完成，耗时: ${endTime - startTime}ms`, 'success');
+                log(`3次调用结果: ${results.map(r => r.callId).join(', ')}`, 'info');
+                
+                // 检查是否使用了缓存
+                const uniqueResults = new Set(results.map(r => JSON.stringify(r.data)));
+                if (uniqueResults.size === 1) {
+                    log('✅ Token缓存工作正常，3次调用返回相同结果', 'success');
+                } else {
+                    log('❌ Token缓存可能有问题，返回了不同结果', 'error');
+                }
+            } catch (error) {
+                log(`Token缓存测试失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 模拟fetchToken函数（简化版）
+        const tokenCache = new Map();
+        const TOKEN_CACHE_DURATION = 2 * 60 * 60 * 1000;
+
+        async function fetchTokenTest(mainCompany, callId) {
+            const cacheKey = `token_${mainCompany}`;
+            const cached = tokenCache.get(cacheKey);
+            
+            if (cached && (Date.now() - cached.timestamp) < TOKEN_CACHE_DURATION) {
+                log(`调用${callId}: 使用缓存Token`, 'info');
+                return { callId, data: cached.data, fromCache: true };
+            }
+            
+            if (cached?.promise) {
+                log(`调用${callId}: 等待进行中的Token请求`, 'warning');
+                const result = await cached.promise;
+                return { callId, data: result, fromCache: false, waited: true };
+            }
+
+            const requestPromise = (async () => {
+                log(`调用${callId}: 开始获取Token`, 'info');
+                // 模拟API延迟
+                await new Promise(resolve => setTimeout(resolve, 100));
+                const result = { access_token: `token_${Date.now()}`, expires_in: 7200 };
+                
+                tokenCache.set(cacheKey, { data: result, timestamp: Date.now() });
+                return result;
+            })();
+            
+            const currentCache = tokenCache.get(cacheKey);
+            tokenCache.set(cacheKey, {
+                data: currentCache?.data || null,
+                timestamp: currentCache?.timestamp || 0,
+                promise: requestPromise
+            });
+            
+            const result = await requestPromise;
+            
+            // 清除promise引用
+            const finalCache = tokenCache.get(cacheKey);
+            if (finalCache) {
+                tokenCache.set(cacheKey, { 
+                    data: finalCache.data, 
+                    timestamp: finalCache.timestamp 
+                });
+            }
+            
+            return { callId, data: result, fromCache: false };
+        }
+
+        // 测试员工数据缓存
+        async function testEmployeeCache() {
+            log('开始测试员工数据缓存...', 'info');
+            
+            const startTime = Date.now();
+            
+            // 连续调用3次，应该只有第一次真正发起请求
+            const promises = [];
+            for (let i = 0; i < 3; i++) {
+                promises.push(fetchEmployeesTest('eyewind', i + 1));
+            }
+            
+            try {
+                const results = await Promise.all(promises);
+                const endTime = Date.now();
+                
+                log(`员工数据缓存测试完成，耗时: ${endTime - startTime}ms`, 'success');
+                log(`3次调用结果: ${results.map(r => `调用${r.callId}(${r.employees.length}人)`).join(', ')}`, 'info');
+                
+                // 检查是否使用了缓存
+                const allSameLength = results.every(r => r.employees.length === results[0].employees.length);
+                if (allSameLength) {
+                    log('✅ 员工数据缓存工作正常，3次调用返回相同数量的员工', 'success');
+                } else {
+                    log('❌ 员工数据缓存可能有问题，返回了不同数量的员工', 'error');
+                }
+            } catch (error) {
+                log(`员工数据缓存测试失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 模拟fetchAllEmployees函数（简化版）
+        const employeeCache = new Map();
+        const CACHE_DURATION = 5 * 60 * 1000;
+
+        async function fetchEmployeesTest(mainCompany, callId) {
+            const cacheKey = `employees_${mainCompany}`;
+            const cached = employeeCache.get(cacheKey);
+            
+            if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
+                log(`调用${callId}: 使用缓存员工数据`, 'info');
+                return { callId, employees: cached.data, fromCache: true };
+            }
+            
+            if (cached?.promise) {
+                log(`调用${callId}: 等待进行中的员工请求`, 'warning');
+                const result = await cached.promise;
+                return { callId, employees: result, fromCache: false, waited: true };
+            }
+
+            const requestPromise = (async () => {
+                log(`调用${callId}: 开始获取员工数据`, 'info');
+                // 模拟API延迟
+                await new Promise(resolve => setTimeout(resolve, 150));
+                const result = [
+                    { userid: 'user_1001', name: '张伟', department: '研发部' },
+                    { userid: 'user_1002', name: '李芳', department: '市场部' },
+                    { userid: 'user_1003', name: '王强', department: '设计部' },
+                    { userid: 'user_1004', name: '赵敏', department: '人事部' },
+                    { userid: 'user_1005', name: '陈磊', department: '研发部' }
+                ];
+                
+                employeeCache.set(cacheKey, { data: result, timestamp: Date.now() });
+                return result;
+            })();
+            
+            const currentCache = employeeCache.get(cacheKey);
+            employeeCache.set(cacheKey, {
+                data: currentCache?.data || [],
+                timestamp: currentCache?.timestamp || 0,
+                promise: requestPromise
+            });
+            
+            const result = await requestPromise;
+            
+            // 清除promise引用
+            const finalCache = employeeCache.get(cacheKey);
+            if (finalCache) {
+                employeeCache.set(cacheKey, { 
+                    data: finalCache.data, 
+                    timestamp: finalCache.timestamp 
+                });
+            }
+            
+            return { callId, employees: result, fromCache: false };
+        }
+
+        // 测试考勤API
+        async function testAttendanceAPI() {
+            log('开始测试考勤API...', 'info');
+            
+            try {
+                const response = await fetch('/api/v1/attendance/status/load');
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    log(`✅ 考勤API调用成功: ${response.status}`, 'success');
+                    log(`返回数据: ${JSON.stringify(data).substring(0, 200)}...`, 'info');
+                } else {
+                    log(`❌ 考勤API调用失败: ${response.status} ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                log(`考勤API测试失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载时显示说明
+        window.onload = function() {
+            log('页面加载完成，可以开始测试', 'success');
+            log('点击上方按钮测试不同的缓存机制', 'info');
+        };
+    </script>
+</body>
+</html>

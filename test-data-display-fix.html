@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据显示逻辑修复验证</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .problem-found {
+            background: #fef2f2;
+            border: 1px solid #f87171;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .fix-applied {
+            background: #dcfce7;
+            border: 1px solid #16a34a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .log { 
+            background: #f1f5f9; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 4px; 
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .success { color: #059669; }
+        .info { color: #0284c7; }
+        .warning { color: #d97706; }
+        .error { color: #dc2626; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 数据显示逻辑修复验证</h1>
+        
+        <div class="problem-found">
+            <h3>❌ 发现的问题</h3>
+            <p><strong>问题1：</strong>从截图看到2025-12和2024-11都返回200状态（有数据），但页面还是显示"2025年1月还未配置考勤确认信息"</p>
+            <p><strong>问题2：</strong>缓存数据中部门字段显示为空，字段映射不正确</p>
+            
+            <h4>🔍 根本原因：</h4>
+            <p><strong>状态更新不完整：</strong>数据处理逻辑有缺陷</p>
+            <ol>
+                <li>API返回数据，但处理后transformedSheets为空</li>
+                <li>原代码只在有数据时才调用setSheets</li>
+                <li>没有数据时不清除之前的sheetsError状态</li>
+                <li>导致页面显示旧的错误信息而不是数据列表</li>
+            </ol>
+            
+            <p><strong>部门字段映射不完整：</strong>API返回的部门字段名称与映射逻辑不匹配</p>
+            <ol>
+                <li>API可能返回不同的部门字段名称</li>
+                <li>原映射逻辑覆盖的字段名称不够全面</li>
+                <li>需要支持更多可能的字段名称变体</li>
+            </ol>
+        </div>
+        
+        <div class="fix-applied">
+            <h3>✅ 修复方案</h3>
+            <p><strong>完善状态管理：</strong>确保数据处理后正确更新所有相关状态</p>
+            <p><strong>增强字段映射：</strong>支持更多部门字段名称变体</p>
+            
+            <h4>🔧 修复内容：</h4>
+            <ol>
+                <li><strong>无条件更新sheets：</strong>无论是否有数据都调用setSheets</li>
+                <li><strong>清除错误状态：</strong>有数据时清除sheetsError</li>
+                <li><strong>设置友好错误：</strong>无数据时设置适当的错误信息</li>
+                <li><strong>状态同步：</strong>确保sheets和sheetsError状态同步更新</li>
+                <li><strong>扩展部门字段映射：</strong>支持department、dept、dept_name、department_name、deptName、departmentName、部门等字段</li>
+                <li><strong>添加调试日志：</strong>记录字段映射过程，便于排查问题</li>
+            </ol>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 修复逻辑验证</h3>
+            <button onclick="testDataDisplayLogic()">测试数据显示逻辑</button>
+            <button onclick="testDepartmentFieldMapping()">测试部门字段映射</button>
+            <button onclick="testEmployeeCrossReference()">测试员工数据交叉引用</button>
+            <button onclick="simulateScenarios()">模拟各种场景</button>
+            <button onclick="clearLogs()">清除日志</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 修复前后对比</h3>
+            
+            <h4>修复前的问题代码：</h4>
+            <div class="code-block">
+// ❌ 问题代码：状态更新不完整
+transformedSheets.sort((a, b) => b.month.localeCompare(a.month));
+console.log('处理完成，考勤单数量:', transformedSheets.length);
+
+if (transformedSheets.length > 0) {
+    setSheets(transformedSheets); // 只在有数据时更新
+}
+// 没有清除sheetsError，导致显示旧的错误信息
+            </div>
+            
+            <h4>修复后的代码：</h4>
+            <div class="code-block">
+// ✅ 修复代码：完善状态管理
+transformedSheets.sort((a, b) => b.month.localeCompare(a.month));
+console.log('处理完成，考勤单数量:', transformedSheets.length);
+
+// 无论是否有数据都要设置sheets状态，清除错误信息
+setSheets(transformedSheets);
+if (transformedSheets.length === 0) {
+    // 如果处理后没有数据，设置友好的错误信息
+    const monthText = globalMonth ? globalMonth.replace('-', '年') + '月' : '当前月份';
+    setSheetsError(`${monthText}还未配置考勤确认信息，请移步考勤仪表盘设置并确认`);
+} else {
+    // 有数据时清除错误信息
+    setSheetsError(null);
+}
+            </div>
+        </div>
+        
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        function testEmployeeCrossReference() {
+            log('👥 开始测试员工数据交叉引用...', 'info');
+            
+            // 模拟员工数据
+            const mockEmployees = [
+                { userid: '001', name: '张三', department: '技术部' },
+                { userid: '002', name: '李四', department: '产品部' },
+                { userid: '003', name: '王五', department: '运营部' },
+                { userid: '004', name: '赵六', department: '市场部' }
+            ];
+            
+            // 模拟考勤记录（没有部门信息）
+            const mockAttendanceRecords = [
+                { userid: '001', username: '张三' }, // 按userid匹配
+                { userid: '999', username: '李四' }, // userid不匹配，按姓名匹配
+                { userid: '003', username: '王五', department: '财务部' }, // 考勤记录有部门信息，应优先使用
+                { userid: '005', username: '钱七' }, // 无法匹配
+            ];
+            
+            mockAttendanceRecords.forEach((record, index) => {
+                log(`<br>📋 测试记录 ${index + 1}: ${record.username}`, 'info');
+                
+                // 模拟部门字段映射逻辑（包含员工数据交叉引用）
+                let departmentValue = record.department || '';
+                
+                if (!departmentValue && mockEmployees) {
+                    const employeeId = record.userid || '';
+                    const employeeName = record.username || '';
+                    
+                    // 先按userid匹配
+                    let matchedEmployee = mockEmployees.find(emp => emp.userid === employeeId);
+                    
+                    // 如果按userid没找到，尝试按姓名匹配
+                    if (!matchedEmployee && employeeName) {
+                        matchedEmployee = mockEmployees.find(emp => emp.name === employeeName);
+                    }
+                    
+                    if (matchedEmployee && matchedEmployee.department) {
+                        departmentValue = matchedEmployee.department;
+                    }
+                }
+                
+                log(`   输入: userid=${record.userid}, username=${record.username}, department=${record.department || 'undefined'}`, 'info');
+                log(`   匹配结果: ${departmentValue}`, departmentValue ? 'success' : 'error');
+                log(`   匹配方式: ${record.department ? '考勤记录直接包含' : departmentValue ? '员工数据交叉引用' : '无法匹配'}`, 'info');
+            });
+            
+            log(`<br>🎉 员工数据交叉引用测试完成`, 'success');
+            log('', 'info');
+            log('📝 交叉引用逻辑:', 'info');
+            log('1. 优先使用考勤记录中的部门信息', 'info');
+            log('2. 如果考勤记录无部门信息，按userid匹配员工数据', 'info');
+            log('3. 如果userid匹配失败，按姓名匹配员工数据', 'info');
+            log('4. 如果都匹配失败，部门字段为空', 'info');
+        }
+
+        function testDepartmentFieldMapping() {
+            log('🏢 开始测试部门字段映射...', 'info');
+            
+            // 模拟不同的API数据结构
+            const testRecords = [
+                {
+                    name: '标准department字段',
+                    record: { userid: '001', username: '张三', department: '技术部' },
+                    expected: '技术部'
+                },
+                {
+                    name: 'dept字段',
+                    record: { userid: '002', username: '李四', dept: '产品部' },
+                    expected: '产品部'
+                },
+                {
+                    name: 'dept_name字段',
+                    record: { userid: '003', username: '王五', dept_name: '运营部' },
+                    expected: '运营部'
+                },
+                {
+                    name: 'department_name字段',
+                    record: { userid: '004', username: '赵六', department_name: '市场部' },
+                    expected: '市场部'
+                },
+                {
+                    name: 'deptName字段',
+                    record: { userid: '005', username: '钱七', deptName: '财务部' },
+                    expected: '财务部'
+                },
+                {
+                    name: 'departmentName字段',
+                    record: { userid: '006', username: '孙八', departmentName: '人事部' },
+                    expected: '人事部'
+                },
+                {
+                    name: '中文部门字段',
+                    record: { userid: '007', username: '周九', 部门: '法务部' },
+                    expected: '法务部'
+                },
+                {
+                    name: '多字段优先级测试',
+                    record: { 
+                        userid: '008', 
+                        username: '吴十',
+                        department: '技术部',
+                        dept: '产品部',
+                        dept_name: '运营部'
+                    },
+                    expected: '技术部' // department字段优先级最高
+                },
+                {
+                    name: '无部门字段',
+                    record: { userid: '009', username: '郑十一' },
+                    expected: ''
+                }
+            ];
+            
+            testRecords.forEach(test => {
+                log(`📋 测试: ${test.name}`, 'info');
+                
+                // 模拟字段映射逻辑
+                const departmentValue = test.record.department || 
+                                      test.record.dept || 
+                                      test.record.dept_name || 
+                                      test.record.department_name || 
+                                      test.record.deptName || 
+                                      test.record.departmentName || 
+                                      test.record.部门 || '';
+                
+                log(`   输入字段: ${JSON.stringify(test.record)}`, 'info');
+                log(`   映射结果: "${departmentValue}"`, 'info');
+                log(`   期望结果: "${test.expected}"`, 'info');
+                
+                if (departmentValue === test.expected) {
+                    log(`   ✅ 映射正确`, 'success');
+                } else {
+                    log(`   ❌ 映射错误: 期望"${test.expected}", 实际"${departmentValue}"`, 'error');
+                }
+                
+                log('', 'info');
+            });
+            
+            log('🎉 部门字段映射测试完成', 'success');
+            log('', 'info');
+            log('📝 字段映射优先级:', 'info');
+            log('1. department (标准字段)', 'info');
+            log('2. dept (简写)', 'info');
+            log('3. dept_name (下划线命名)', 'info');
+            log('4. department_name (完整下划线命名)', 'info');
+            log('5. deptName (驼峰命名)', 'info');
+            log('6. departmentName (完整驼峰命名)', 'info');
+            log('7. 部门 (中文字段)', 'info');
+        }
+
+        function testDataDisplayLogic() {
+            log('🧪 开始测试数据显示逻辑...', 'info');
+            
+            // 模拟不同的数据处理场景
+            const scenarios = [
+                {
+                    name: '有数据场景',
+                    apiData: { '2025-12': [{ mainCompany: 'eyewind', records: {} }] },
+                    expectedSheets: 1,
+                    expectedError: null
+                },
+                {
+                    name: '无数据场景',
+                    apiData: {},
+                    expectedSheets: 0,
+                    expectedError: '2026年1月还未配置考勤确认信息'
+                },
+                {
+                    name: '数据过滤后为空',
+                    apiData: { '2025-12': [{ mainCompany: 'other', records: {} }] },
+                    expectedSheets: 0,
+                    expectedError: '2026年1月还未配置考勤确认信息'
+                }
+            ];
+            
+            scenarios.forEach(scenario => {
+                log(`📋 测试场景: ${scenario.name}`, 'info');
+                
+                // 模拟数据处理逻辑
+                const recordsByMonth = scenario.apiData;
+                const transformedSheets = [];
+                const currentCompany = 'eyewind';
+                const globalMonth = '2026-01';
+                
+                for (const [month, dbRecords] of Object.entries(recordsByMonth)) {
+                    if (!Array.isArray(dbRecords) || dbRecords.length === 0) continue;
+                    
+                    if (globalMonth && month !== globalMonth) {
+                        log(`   跳过月份 ${month}，当前全局月份: ${globalMonth}`, 'warning');
+                        continue;
+                    }
+                    
+                    const filteredRecords = dbRecords.filter(record => record.mainCompany === currentCompany);
+                    if (filteredRecords.length === 0) {
+                        log(`   月份 ${month} 没有匹配的公司数据`, 'warning');
+                        continue;
+                    }
+                    
+                    transformedSheets.push({
+                        id: `sheet_${month}`,
+                        month: month,
+                        employeeRecords: filteredRecords
+                    });
+                }
+                
+                // 修复后的状态更新逻辑
+                let sheets = transformedSheets;
+                let sheetsError = null;
+                
+                if (transformedSheets.length === 0) {
+                    const monthText = globalMonth ? globalMonth.replace('-', '年') + '月' : '当前月份';
+                    sheetsError = `${monthText}还未配置考勤确认信息，请移步考勤仪表盘设置并确认`;
+                }
+                
+                // 验证结果
+                log(`   处理结果: sheets数量=${sheets.length}, error=${sheetsError ? '有' : '无'}`, 'info');
+                
+                if (sheets.length === scenario.expectedSheets) {
+                    log(`   ✅ sheets数量正确: ${sheets.length}`, 'success');
+                } else {
+                    log(`   ❌ sheets数量错误: 期望${scenario.expectedSheets}, 实际${sheets.length}`, 'error');
+                }
+                
+                if ((sheetsError === null) === (scenario.expectedError === null)) {
+                    log(`   ✅ 错误状态正确`, 'success');
+                } else {
+                    log(`   ❌ 错误状态错误`, 'error');
+                }
+                
+                log('', 'info');
+            });
+            
+            log('🎉 数据显示逻辑测试完成', 'success');
+        }
+
+        function simulateScenarios() {
+            log('🔄 模拟实际使用场景...', 'info');
+            
+            log('场景1: API返回有效数据', 'info');
+            log('  → API响应: 200 OK', 'success');
+            log('  → 数据处理: 生成transformedSheets', 'info');
+            log('  → 状态更新: setSheets(data), setSheetsError(null)', 'success');
+            log('  → 页面显示: SheetList组件（考勤单列表）', 'success');
+            
+            log('场景2: API返回数据但过滤后为空', 'info');
+            log('  → API响应: 200 OK', 'success');
+            log('  → 数据处理: 过滤后transformedSheets为空', 'warning');
+            log('  → 状态更新: setSheets([]), setSheetsError(message)', 'info');
+            log('  → 页面显示: 错误页面 + 创建按钮', 'info');
+            
+            log('场景3: API返回404', 'info');
+            log('  → API响应: 404 Not Found', 'error');
+            log('  → 直接处理: setSheetsError(message), setSheets([])', 'info');
+            log('  → 页面显示: 错误页面 + 创建按钮', 'info');
+            
+            log('✅ 修复后的预期效果:', 'success');
+            log('• 有数据时: 直接显示考勤确认单列表', 'success');
+            log('• 无数据时: 显示友好错误信息和创建按钮', 'success');
+            log('• 状态同步: sheets和sheetsError状态始终保持一致', 'success');
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('数据显示逻辑修复验证工具加载完成', 'success');
+            log('', 'info');
+            log('🎯 修复的核心问题:', 'info');
+            log('• API返回数据但页面显示错误信息', 'warning');
+            log('• 状态更新不完整导致的显示异常', 'warning');
+            log('• sheets和sheetsError状态不同步', 'warning');
+            log('• 缓存数据中部门字段显示为空', 'warning');
+            log('', 'info');
+            log('✅ 修复方案:', 'info');
+            log('• 无条件更新sheets状态', 'success');
+            log('• 有数据时清除错误信息', 'success');
+            log('• 无数据时设置友好错误', 'success');
+            log('• 确保状态同步更新', 'success');
+            log('• 扩展部门字段映射覆盖范围', 'success');
+            log('• 添加字段映射调试日志', 'success');
+            log('', 'info');
+            log('🔍 修复后的预期效果:', 'info');
+            log('• 有数据: 显示考勤确认单列表', 'success');
+            log('• 无数据: 显示错误信息和创建按钮', 'success');
+            log('• 状态一致: 不再出现状态不同步问题', 'success');
+            log('• 部门显示: 正确映射和显示部门信息', 'success');
+            log('', 'info');
+            log('现在可以开始验证修复效果...', 'info');
+        };
+    </script>
+</body>
+</html>

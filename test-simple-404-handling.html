@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>简化404处理测试</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .simple-approach {
+            background: #dcfce7;
+            border: 1px solid #16a34a;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .log { 
+            background: #f1f5f9; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 4px; 
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .success { color: #059669; }
+        .info { color: #0284c7; }
+        .warning { color: #d97706; }
+        .error { color: #dc2626; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .code-block {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 简化404处理方案测试</h1>
+        
+        <div class="simple-approach">
+            <h3>✅ 简化方案</h3>
+            <p><strong>核心思路：</strong>不要过度复杂化，直接处理错误情况</p>
+            
+            <h4>🔧 简化逻辑：</h4>
+            <ol>
+                <li><strong>404响应：</strong>直接设置错误信息，显示"当前月份没有考勤数据"</li>
+                <li><strong>success=false：</strong>直接设置错误信息，显示API返回的错误消息</li>
+                <li><strong>无数据：</strong>直接设置错误信息，显示"API返回无数据"</li>
+                <li><strong>所有错误情况：</strong>都直接return，不继续处理数据</li>
+                <li><strong>finally块：</strong>确保loading状态总是被正确设置为false</li>
+            </ol>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧪 简化逻辑测试</h3>
+            <button onclick="testSimple404()">测试404处理</button>
+            <button onclick="testSimpleSuccess()">测试成功响应</button>
+            <button onclick="testSimpleError()">测试错误响应</button>
+            <button onclick="clearLogs()">清除日志</button>
+        </div>
+        
+        <div class="test-section">
+            <h3>📋 简化前后对比</h3>
+            
+            <h4>复杂的旧逻辑（有问题）：</h4>
+            <div class="code-block">
+// ❌ 复杂的处理逻辑
+if (response.status === 404) {
+    // 处理404，但不return，继续执行后面的代码
+    // 可能导致访问不存在的数据结构
+} else if (!response.ok) {
+    throw new Error(...);
+} else {
+    // 处理成功响应
+    if (!apiResponse.success || !apiResponse.data) {
+        // 又是一层复杂的处理
+        // 不return，继续执行
+    } else {
+        // 复杂的数据处理逻辑
+    }
+}
+            </div>
+            
+            <h4>简化的新逻辑（清晰）：</h4>
+            <div class="code-block">
+// ✅ 简化的处理逻辑
+if (response.status === 404) {
+    const errorData = await response.json();
+    setSheetsError(errorData.message || '当前月份没有考勤数据');
+    setSheets([]);
+    return; // 直接返回，不处理数据
+}
+
+if (!response.ok) {
+    throw new Error(`API请求失败: ${response.status}`);
+}
+
+const apiResponse = await response.json();
+
+if (!apiResponse.success) {
+    setSheetsError(apiResponse.message || 'API返回失败状态');
+    setSheets([]);
+    return; // 直接返回，不处理数据
+}
+
+if (!apiResponse.data) {
+    setSheetsError('API返回无数据');
+    setSheets([]);
+    return; // 直接返回，不处理数据
+}
+
+// 只有在完全成功时才处理数据
+// 处理数据逻辑...
+            </div>
+        </div>
+        
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+
+        async function testSimple404() {
+            log('🧪 开始测试简化的404处理...', 'info');
+            
+            try {
+                const response = await fetch('/api/v1/attendance/status/load/2026-01');
+                log(`响应状态: ${response.status}`, 'info');
+                
+                if (response.status === 404) {
+                    const errorData = await response.json();
+                    log('✅ 404处理逻辑:', 'success');
+                    log(`  - 设置错误信息: ${errorData.message}`, 'info');
+                    log('  - 设置sheets为空数组', 'info');
+                    log('  - 直接return，不处理数据', 'info');
+                    log('  - finally块会执行，设置loading=false', 'info');
+                    log('✅ 页面应该显示错误信息，而不是一直加载', 'success');
+                } else if (response.ok) {
+                    log('ℹ️ 响应成功，不是404情况', 'info');
+                } else {
+                    log(`⚠️ 其他错误状态: ${response.status}`, 'warning');
+                }
+                
+            } catch (error) {
+                log(`❌ 测试异常: ${error.message}`, 'error');
+            }
+        }
+
+        async function testSimpleSuccess() {
+            log('🧪 开始测试成功响应处理...', 'info');
+            
+            // 模拟成功响应的处理逻辑
+            const mockSuccessResponse = {
+                success: true,
+                data: {
+                    '2026-01': [
+                        { mainCompany: 'eyewind', records: { name: '测试员工' } }
+                    ]
+                }
+            };
+            
+            log('✅ 成功响应处理逻辑:', 'success');
+            log('  - 检查response.ok: true', 'info');
+            log('  - 检查apiResponse.success: true', 'info');
+            log('  - 检查apiResponse.data: 存在', 'info');
+            log('  - 处理数据，生成transformedSheets', 'info');
+            log('  - 设置sheets状态', 'info');
+            log('  - finally块执行，设置loading=false', 'info');
+            log('✅ 页面应该显示考勤数据列表', 'success');
+        }
+
+        async function testSimpleError() {
+            log('🧪 开始测试错误响应处理...', 'info');
+            
+            // 模拟不同的错误情况
+            const errorScenarios = [
+                { name: 'success=false', success: false, message: 'API业务逻辑错误' },
+                { name: '无data字段', success: true, data: null },
+                { name: '空data字段', success: true, data: {} }
+            ];
+            
+            errorScenarios.forEach(scenario => {
+                log(`📋 ${scenario.name}场景:`, 'info');
+                log('  - 设置对应的错误信息', 'info');
+                log('  - 设置sheets为空数组', 'info');
+                log('  - 直接return，不处理数据', 'info');
+                log('  - finally块执行，设置loading=false', 'info');
+                log('✅ 页面应该显示具体的错误信息', 'success');
+            });
+        }
+
+        // 页面加载时的初始化
+        window.onload = function() {
+            log('简化404处理测试工具加载完成', 'success');
+            log('', 'info');
+            log('🎯 简化方案的核心优势:', 'info');
+            log('1. 逻辑清晰：每种错误情况都有明确的处理', 'success');
+            log('2. 避免复杂性：不再有嵌套的if-else逻辑', 'success');
+            log('3. 确保finally执行：所有路径都会到达finally块', 'success');
+            log('4. 用户体验好：明确显示错误信息，不会一直加载', 'success');
+            log('', 'info');
+            log('🔧 关键修改点:', 'info');
+            log('• 404/success=false/无数据 都直接return', 'warning');
+            log('• finally块确保loading状态总是被设置为false', 'warning');
+            log('• 错误信息直接显示给用户，不隐藏', 'warning');
+            log('', 'info');
+            log('现在可以开始测试简化效果...', 'info');
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API字段检查</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        .result { 
+            margin-top: 10px; 
+            padding: 15px; 
+            background: #f1f5f9; 
+            border-radius: 6px; 
+            white-space: pre-wrap; 
+            font-family: monospace; 
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { border-left: 4px solid #059669; }
+        .error { border-left: 4px solid #dc2626; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+        .field-analysis {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 API字段结构检查</h1>
+        
+        <p>检查考勤API返回的实际字段结构，特别是部门相关字段。</p>
+        
+        <div class="test-section">
+            <h3>检查API返回的字段结构</h3>
+            <button onclick="checkApiFields()">检查API字段</button>
+            <button onclick="checkSpecificMonth()">检查特定月份 (2025-12)</button>
+            <button onclick="clearResults()">清除结果</button>
+            <div id="apiFieldsResult" class="result" style="display: none;"></div>
+        </div>
+        
+        <div class="field-analysis">
+            <h4>🎯 检查目标</h4>
+            <ul>
+                <li>确认API返回的记录中包含哪些字段</li>
+                <li>查找部门相关的字段名称（department, dept, dept_name等）</li>
+                <li>分析字段值的格式和内容</li>
+                <li>为字段映射提供准确的信息</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function showResult(elementId, content, isError = false) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = `result ${isError ? 'error' : 'success'}`;
+            element.textContent = content;
+        }
+        
+        function clearResults() {
+            document.getElementById('apiFieldsResult').style.display = 'none';
+        }
+        
+        async function checkApiFields() {
+            try {
+                showResult('apiFieldsResult', '🔄 正在请求API...', false);
+                
+                const response = await fetch('/api/v1/attendance/status/load');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const apiResponse = await response.json();
+                
+                let analysis = '📊 API响应分析\\n';
+                analysis += '='.repeat(50) + '\\n\\n';
+                
+                analysis += `✅ 响应状态: ${response.status}\\n`;
+                analysis += `📝 Success: ${apiResponse.success}\\n`;
+                analysis += `💬 Message: ${apiResponse.message}\\n\\n`;
+                
+                if (apiResponse.data) {
+                    if (typeof apiResponse.data === 'object' && !Array.isArray(apiResponse.data)) {
+                        // 按月份分组的数据
+                        analysis += '📅 数据结构: 按月份分组\\n';
+                        analysis += `📊 月份数量: ${Object.keys(apiResponse.data).length}\\n`;
+                        analysis += `📋 月份列表: ${Object.keys(apiResponse.data).join(', ')}\\n\\n`;
+                        
+                        // 分析第一个月份的数据
+                        const firstMonth = Object.keys(apiResponse.data)[0];
+                        if (firstMonth && Array.isArray(apiResponse.data[firstMonth])) {
+                            const records = apiResponse.data[firstMonth];
+                            analysis += `🔍 分析月份: ${firstMonth}\\n`;
+                            analysis += `📈 记录数量: ${records.length}\\n\\n`;
+                            
+                            if (records.length > 0) {
+                                const firstRecord = records[0];
+                                analysis += '🏷️ 第一条记录的所有字段:\\n';
+                                analysis += '-'.repeat(30) + '\\n';
+                                
+                                Object.keys(firstRecord).forEach(key => {
+                                    const value = firstRecord[key];
+                                    const valueStr = value === null ? 'null' : 
+                                                   value === undefined ? 'undefined' : 
+                                                   typeof value === 'string' ? `"${value}"` : 
+                                                   JSON.stringify(value);
+                                    analysis += `${key}: ${valueStr}\\n`;
+                                });
+                                
+                                analysis += '\\n🏢 部门相关字段检查:\\n';
+                                analysis += '-'.repeat(30) + '\\n';
+                                
+                                const departmentFields = ['department', 'dept', 'dept_name', 'department_name', 'deptName', 'departmentName', '部门'];
+                                let foundDepartmentFields = [];
+                                
+                                departmentFields.forEach(field => {
+                                    if (field in firstRecord) {
+                                        foundDepartmentFields.push(field);
+                                        analysis += `✅ ${field}: ${JSON.stringify(firstRecord[field])}\\n`;
+                                    } else {
+                                        analysis += `❌ ${field}: 不存在\\n`;
+                                    }
+                                });
+                                
+                                if (foundDepartmentFields.length === 0) {
+                                    analysis += '\\n⚠️ 警告: 没有找到任何部门相关字段！\\n';
+                                    analysis += '💡 建议: 检查API数据源或考虑从其他字段获取部门信息\\n';
+                                } else {
+                                    analysis += `\\n✅ 找到 ${foundDepartmentFields.length} 个部门字段: ${foundDepartmentFields.join(', ')}\\n`;
+                                }
+                                
+                                // 检查更多记录以确认字段一致性
+                                if (records.length > 1) {
+                                    analysis += '\\n🔄 检查字段一致性 (前5条记录):\\n';
+                                    analysis += '-'.repeat(30) + '\\n';
+                                    
+                                    const checkRecords = records.slice(0, 5);
+                                    foundDepartmentFields.forEach(field => {
+                                        analysis += `${field}字段值:\\n`;
+                                        checkRecords.forEach((record, index) => {
+                                            const value = record[field];
+                                            const valueStr = value === null ? 'null' : 
+                                                           value === undefined ? 'undefined' : 
+                                                           typeof value === 'string' ? `"${value}"` : 
+                                                           JSON.stringify(value);
+                                            analysis += `  记录${index + 1}: ${valueStr}\\n`;
+                                        });
+                                        analysis += '\\n';
+                                    });
+                                }
+                            }
+                        }
+                    } else if (Array.isArray(apiResponse.data)) {
+                        // 直接的数组数据
+                        analysis += '📅 数据结构: 直接数组\\n';
+                        analysis += `📈 记录数量: ${apiResponse.data.length}\\n\\n`;
+                        
+                        if (apiResponse.data.length > 0) {
+                            const firstRecord = apiResponse.data[0];
+                            analysis += '🏷️ 第一条记录的所有字段:\\n';
+                            analysis += '-'.repeat(30) + '\\n';
+                            
+                            Object.keys(firstRecord).forEach(key => {
+                                const value = firstRecord[key];
+                                const valueStr = value === null ? 'null' : 
+                                               value === undefined ? 'undefined' : 
+                                               typeof value === 'string' ? `"${value}"` : 
+                                               JSON.stringify(value);
+                                analysis += `${key}: ${valueStr}\\n`;
+                            });
+                        }
+                    }
+                } else {
+                    analysis += '❌ 没有数据返回\\n';
+                }
+                
+                showResult('apiFieldsResult', analysis, false);
+                
+            } catch (error) {
+                showResult('apiFieldsResult', `❌ 请求失败: ${error.message}`, true);
+            }
+        }
+        
+        async function checkSpecificMonth() {
+            try {
+                showResult('apiFieldsResult', '🔄 正在请求特定月份数据...', false);
+                
+                const response = await fetch('/api/v1/attendance/status/load/2025-12');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const apiResponse = await response.json();
+                
+                let analysis = '📊 特定月份API响应分析 (2025-12)\\n';
+                analysis += '='.repeat(50) + '\\n\\n';
+                
+                analysis += `✅ 响应状态: ${response.status}\\n`;
+                analysis += `📝 Success: ${apiResponse.success}\\n`;
+                analysis += `💬 Message: ${apiResponse.message}\\n\\n`;
+                
+                if (apiResponse.data && Array.isArray(apiResponse.data)) {
+                    analysis += `📈 记录数量: ${apiResponse.data.length}\\n\\n`;
+                    
+                    if (apiResponse.data.length > 0) {
+                        const firstRecord = apiResponse.data[0];
+                        analysis += '🏷️ 第一条记录的所有字段:\\n';
+                        analysis += '-'.repeat(30) + '\\n';
+                        
+                        Object.keys(firstRecord).forEach(key => {
+                            const value = firstRecord[key];
+                            const valueStr = value === null ? 'null' : 
+                                           value === undefined ? 'undefined' : 
+                                           typeof value === 'string' ? `"${value}"` : 
+                                           JSON.stringify(value);
+                            analysis += `${key}: ${valueStr}\\n`;
+                        });
+                        
+                        analysis += '\\n🏢 部门相关字段检查:\\n';
+                        analysis += '-'.repeat(30) + '\\n';
+                        
+                        const departmentFields = ['department', 'dept', 'dept_name', 'department_name', 'deptName', 'departmentName', '部门'];
+                        let foundDepartmentFields = [];
+                        
+                        departmentFields.forEach(field => {
+                            if (field in firstRecord) {
+                                foundDepartmentFields.push(field);
+                                analysis += `✅ ${field}: ${JSON.stringify(firstRecord[field])}\\n`;
+                            } else {
+                                analysis += `❌ ${field}: 不存在\\n`;
+                            }
+                        });
+                        
+                        if (foundDepartmentFields.length === 0) {
+                            analysis += '\\n⚠️ 警告: 没有找到任何部门相关字段！\\n';
+                            analysis += '💡 可能的解决方案:\\n';
+                            analysis += '  1. 检查数据源表是否包含部门字段\\n';
+                            analysis += '  2. 考虑从员工API获取部门信息\\n';
+                            analysis += '  3. 检查字段名称是否使用了其他命名方式\\n';
+                        } else {
+                            analysis += `\\n✅ 找到 ${foundDepartmentFields.length} 个部门字段: ${foundDepartmentFields.join(', ')}\\n`;
+                        }
+                    }
+                } else {
+                    analysis += '❌ 没有数据返回或数据格式不正确\\n';
+                }
+                
+                showResult('apiFieldsResult', analysis, false);
+                
+            } catch (error) {
+                showResult('apiFieldsResult', `❌ 请求失败: ${error.message}`, true);
+            }
+        }
+        
+        // 页面加载时显示说明
+        window.onload = function() {
+            console.log('API字段检查工具已加载');
+        };
+    </script>
+</body>
+</html>

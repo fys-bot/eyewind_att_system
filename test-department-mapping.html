@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>部门字段映射测试</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f8fafc;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success { background: #dcfce7; color: #059669; }
+        .error { background: #fef2f2; color: #dc2626; }
+        .info { background: #f1f5f9; color: #0284c7; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f9fafb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏢 部门字段映射测试</h1>
+        
+        <p>测试AttendancePage.tsx中的部门字段映射逻辑是否正确处理各种字段名称变体。</p>
+        
+        <button onclick="runDepartmentMappingTest()">运行部门字段映射测试</button>
+        <button onclick="clearResults()">清除结果</button>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        function log(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `test-result ${type}`;
+            div.innerHTML = message;
+            results.appendChild(div);
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        // 模拟AttendancePage.tsx中的部门字段映射逻辑
+        function mapDepartmentField(record) {
+            return record.department || 
+                   record.dept || 
+                   record.dept_name || 
+                   record.department_name || 
+                   record.deptName || 
+                   record.departmentName || 
+                   record.部门 || '';
+        }
+
+        function runDepartmentMappingTest() {
+            clearResults();
+            log('🚀 开始部门字段映射测试...', 'info');
+            
+            const testCases = [
+                {
+                    name: '标准department字段',
+                    record: { userid: '001', username: '张三', department: '技术部' },
+                    expected: '技术部'
+                },
+                {
+                    name: 'dept字段',
+                    record: { userid: '002', username: '李四', dept: '产品部' },
+                    expected: '产品部'
+                },
+                {
+                    name: 'dept_name字段',
+                    record: { userid: '003', username: '王五', dept_name: '运营部' },
+                    expected: '运营部'
+                },
+                {
+                    name: 'department_name字段',
+                    record: { userid: '004', username: '赵六', department_name: '市场部' },
+                    expected: '市场部'
+                },
+                {
+                    name: 'deptName字段（驼峰命名）',
+                    record: { userid: '005', username: '钱七', deptName: '财务部' },
+                    expected: '财务部'
+                },
+                {
+                    name: 'departmentName字段（完整驼峰命名）',
+                    record: { userid: '006', username: '孙八', departmentName: '人事部' },
+                    expected: '人事部'
+                },
+                {
+                    name: '中文部门字段',
+                    record: { userid: '007', username: '周九', 部门: '法务部' },
+                    expected: '法务部'
+                },
+                {
+                    name: '多字段优先级测试（department优先）',
+                    record: { 
+                        userid: '008', 
+                        username: '吴十',
+                        department: '技术部',
+                        dept: '产品部',
+                        dept_name: '运营部'
+                    },
+                    expected: '技术部'
+                },
+                {
+                    name: '多字段优先级测试（dept次优先）',
+                    record: { 
+                        userid: '009', 
+                        username: '郑十一',
+                        dept: '产品部',
+                        dept_name: '运营部',
+                        deptName: '财务部'
+                    },
+                    expected: '产品部'
+                },
+                {
+                    name: '无部门字段',
+                    record: { userid: '010', username: '王十二' },
+                    expected: ''
+                },
+                {
+                    name: '空字符串部门字段',
+                    record: { userid: '011', username: '李十三', department: '' },
+                    expected: ''
+                },
+                {
+                    name: 'null部门字段',
+                    record: { userid: '012', username: '张十四', department: null },
+                    expected: ''
+                },
+                {
+                    name: 'undefined部门字段',
+                    record: { userid: '013', username: '赵十五', department: undefined },
+                    expected: ''
+                }
+            ];
+            
+            let passedTests = 0;
+            let totalTests = testCases.length;
+            
+            testCases.forEach((testCase, index) => {
+                log(`<br>📋 测试 ${index + 1}: ${testCase.name}`, 'info');
+                
+                const result = mapDepartmentField(testCase.record);
+                
+                log(`   输入: ${JSON.stringify(testCase.record)}`, 'info');
+                log(`   期望: "${testCase.expected}"`, 'info');
+                log(`   实际: "${result}"`, 'info');
+                
+                if (result === testCase.expected) {
+                    log(`   ✅ 测试通过`, 'success');
+                    passedTests++;
+                } else {
+                    log(`   ❌ 测试失败`, 'error');
+                }
+            });
+            
+            log(`<br>🎯 测试总结:`, 'info');
+            log(`   总测试数: ${totalTests}`, 'info');
+            log(`   通过数: ${passedTests}`, passedTests === totalTests ? 'success' : 'error');
+            log(`   失败数: ${totalTests - passedTests}`, totalTests - passedTests === 0 ? 'success' : 'error');
+            log(`   通过率: ${((passedTests / totalTests) * 100).toFixed(1)}%`, passedTests === totalTests ? 'success' : 'error');
+            
+            if (passedTests === totalTests) {
+                log(`<br>🎉 所有测试通过！部门字段映射逻辑工作正常。`, 'success');
+            } else {
+                log(`<br>⚠️ 有测试失败，需要检查映射逻辑。`, 'error');
+            }
+            
+            log(`<br>📝 字段映射优先级:`, 'info');
+            log(`   1. department (标准字段)`, 'info');
+            log(`   2. dept (简写)`, 'info');
+            log(`   3. dept_name (下划线命名)`, 'info');
+            log(`   4. department_name (完整下划线命名)`, 'info');
+            log(`   5. deptName (驼峰命名)`, 'info');
+            log(`   6. departmentName (完整驼峰命名)`, 'info');
+            log(`   7. 部门 (中文字段)`, 'info');
+        }
+
+        // 页面加载时显示说明
+        window.onload = function() {
+            log('部门字段映射测试工具已加载', 'success');
+            log('', 'info');
+            log('🎯 测试目标:', 'info');
+            log('• 验证部门字段映射逻辑的正确性', 'info');
+            log('• 确保支持多种字段名称变体', 'info');
+            log('• 验证字段优先级顺序', 'info');
+            log('• 测试边界情况处理', 'info');
+            log('', 'info');
+            log('点击"运行部门字段映射测试"开始测试...', 'info');
+        };
+    </script>
+</body>
+</html>

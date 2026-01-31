@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>简化版本测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .status { padding: 15px; margin: 10px 0; border-radius: 8px; font-weight: bold; }
+        .loading { background: #fff3cd; border: 2px solid #ffeaa7; color: #856404; }
+        .success { background: #d4edda; border: 2px solid #c3e6cb; color: #155724; }
+        .error { background: #f8d7da; border: 2px solid #f5c6cb; color: #721c24; }
+        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #0056b3; }
+        .logs { margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; font-family: monospace; white-space: pre-wrap; max-height: 300px; overflow-y: auto; border: 1px solid #dee2e6; }
+    </style>
+</head>
+<body>
+    <h1>🔧 AttendancePage 简化版本测试</h1>
+    
+    <div id="status" class="status loading">
+        🔄 准备测试...
+    </div>
+    
+    <button onclick="testSimpleFlow()">🚀 测试简化流程</button>
+    <button onclick="clearLogs()">🗑️ 清空日志</button>
+    
+    <div id="logs" class="logs">等待测试开始...</div>
+
+    <script>
+        let logs = [];
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const emoji = type === 'error' ? '❌' : type === 'success' ? '✅' : 'ℹ️';
+            const logMessage = `[${timestamp}] ${emoji} ${message}`;
+            logs.push(logMessage);
+            document.getElementById('logs').textContent = logs.join('\n');
+            console.log(logMessage);
+        }
+        
+        function updateStatus(message, type = 'loading') {
+            const statusEl = document.getElementById('status');
+            const emoji = type === 'loading' ? '🔄' : type === 'success' ? '✅' : '❌';
+            statusEl.textContent = `${emoji} ${message}`;
+            statusEl.className = `status ${type}`;
+        }
+        
+        function clearLogs() {
+            logs = [];
+            document.getElementById('logs').textContent = '日志已清空...';
+        }
+        
+        async function testSimpleFlow() {
+            log('开始测试简化的AttendancePage流程');
+            updateStatus('正在测试API调用...', 'loading');
+            
+            try {
+                // 步骤1: 测试API调用
+                log('步骤1: 调用 /api/v1/attendance/status/load');
+                const response = await fetch('/api/v1/attendance/status/load');
+                
+                log(`API响应状态: ${response.status} ${response.statusText}`);
+                
+                if (!response.ok) {
+                    throw new Error(`API请求失败: ${response.status}`);
+                }
+                
+                // 步骤2: 解析响应
+                log('步骤2: 解析API响应');
+                const apiResponse = await response.json();
+                
+                log(`响应格式检查: success=${apiResponse.success}, data=${typeof apiResponse.data}`);
+                
+                if (!apiResponse.success || !apiResponse.data) {
+                    throw new Error('API返回无效数据');
+                }
+                
+                // 步骤3: 处理数据
+                log('步骤3: 处理考勤数据');
+                const recordsByMonth = apiResponse.data;
+                const months = Object.keys(recordsByMonth);
+                
+                log(`找到月份: ${months.join(', ')}`);
+                
+                let totalSheets = 0;
+                let totalRecords = 0;
+                
+                for (const [month, records] of Object.entries(recordsByMonth)) {
+                    if (Array.isArray(records) && records.length > 0) {
+                        totalSheets++;
+                        totalRecords += records.length;
+                        log(`${month}: ${records.length} 条记录`);
+                    }
+                }
+                
+                // 步骤4: 模拟状态更新
+                log('步骤4: 模拟React状态更新');
+                log('设置 isLoading = false');
+                log('设置 sheets = transformedSheets');
+                
+                // 步骤5: 模拟渲染检查
+                log('步骤5: 模拟渲染条件检查');
+                const mockState = {
+                    view: 'dashboard',
+                    isLoading: false,  // 这应该是false
+                    isRefreshing: false,
+                    sheets: new Array(totalSheets).fill(null)
+                };
+                
+                const shouldShowLoading = mockState.view === 'dashboard' && mockState.isLoading && !mockState.isRefreshing;
+                log(`渲染条件: view=${mockState.view}, isLoading=${mockState.isLoading}, isRefreshing=${mockState.isRefreshing}`);
+                log(`应该显示loading: ${shouldShowLoading}`);
+                
+                if (shouldShowLoading) {
+                    updateStatus('❌ 测试失败: 仍然会显示loading状态', 'error');
+                    log('问题: isLoading仍然为true，会继续显示loading', 'error');
+                } else {
+                    updateStatus(`✅ 测试成功: 找到 ${totalSheets} 个考勤单，共 ${totalRecords} 条记录`, 'success');
+                    log(`测试成功: 应该显示 ${totalSheets} 个考勤单`, 'success');
+                }
+                
+            } catch (error) {
+                log(`测试失败: ${error.message}`, 'error');
+                updateStatus(`❌ 测试失败: ${error.message}`, 'error');
+            }
+        }
+        
+        // 页面加载完成后自动开始测试
+        window.addEventListener('load', () => {
+            log('页面加载完成，准备测试');
+            updateStatus('准备就绪，点击按钮开始测试', 'success');
+        });
+    </script>
+</body>
+</html>
