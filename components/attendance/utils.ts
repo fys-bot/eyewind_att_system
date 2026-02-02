@@ -1,5 +1,5 @@
 
-import type { PunchRecord, DingTalkUser, CompanyCounts, CompanyConfig, AttendanceRuleConfig, LateRule, PerformancePenaltyRule, FullAttendanceRule, LeaveDisplayRule } from '../../database/schema.ts';
+import type { PunchRecord, DingTalkUser, CompanyCounts, CompanyConfig, AttendanceRuleConfig, LateRule, PerformancePenaltyRule, FullAttendanceRule, LeaveDisplayRule, AttendanceMap } from '../../database/schema.ts';
 import { attendanceRuleApiService, type FullAttendanceRuleConfig, type AttRuleDetail, type CompanyId } from '../../services/attendanceRuleApiService.ts';
 
 // --- Configuration Management ---
@@ -387,17 +387,19 @@ export async function getAppConfigAsync(companyKey: string, forceRefresh = false
     const dbCacheKey = `${DB_RULE_CACHE_PREFIX}${key}`;
 
     try {
-        // 尝试从数据库 API 获取配置
+        // 🔥 优先从数据库 API 获取最新配置（特别是在强制刷新时）
+        console.log(`[getAppConfigAsync] 开始加载 ${key} 配置，强制刷新: ${forceRefresh}`);
+        
         const dbConfig = await attendanceRuleApiService.getFullConfig(key as CompanyId, forceRefresh);
         
         if (dbConfig) {
-            // 缓存到 localStorage
+            // 🔥 更新本地缓存
             localStorage.setItem(dbCacheKey, JSON.stringify(dbConfig));
             
             // 转换为前端格式
             const converted = convertDbConfigToFrontend(dbConfig, key);
             if (converted) {
-                console.log(`[getAppConfigAsync] 成功从数据库加载 ${key} 配置`);
+                console.log(`[getAppConfigAsync] ✅ 成功从数据库加载 ${key} 配置`);
                 return converted;
             }
         }
@@ -415,17 +417,49 @@ export async function getAppConfigAsync(companyKey: string, forceRefresh = false
  */
 export async function refreshDbRuleCache(companyKey: string): Promise<void> {
     const key = (companyKey === '海多多' || companyKey === 'hydodo') ? 'hydodo' : 'eyewind';
+    const dbCacheKey = `${DB_RULE_CACHE_PREFIX}${key}`;
     
     try {
-        // 清除 API 服务的内存缓存
+        console.log(`[refreshDbRuleCache] 🔥 开始刷新 ${key} 的规则缓存`);
+        
+        // 1. 清除 API 服务的内存缓存
         attendanceRuleApiService.clearCache(key as CompanyId);
         
-        // 强制从数据库重新加载
-        await getAppConfigAsync(companyKey, true);
+        // 2. 清除本地存储的数据库缓存
+        localStorage.removeItem(dbCacheKey);
         
-        console.log(`[refreshDbRuleCache] 已刷新 ${key} 的规则缓存`);
+        // 3. 清除旧的本地配置缓存（如果存在）
+        const oldConfigKey = CONFIG_KEY;
+        const oldConfigs = localStorage.getItem(oldConfigKey);
+        if (oldConfigs) {
+            try {
+                const configs = JSON.parse(oldConfigs);
+                if (configs[key]) {
+                    delete configs[key];
+                    localStorage.setItem(oldConfigKey, JSON.stringify(configs));
+                }
+            } catch (e) {
+                console.warn('[refreshDbRuleCache] 清除旧配置缓存失败:', e);
+            }
+        }
+        
+        // 4. 强制从数据库重新加载最新配置
+        const freshConfig = await getAppConfigAsync(companyKey, true);
+        
+        console.log(`[refreshDbRuleCache] ✅ 已刷新 ${key} 的规则缓存，新配置:`, {
+            workStartTime: freshConfig.rules?.workStartTime,
+            fullAttendanceBonus: freshConfig.rules?.fullAttendanceBonus,
+            performancePenaltyEnabled: freshConfig.rules?.performancePenaltyEnabled
+        });
+        
+        // 5. 触发全局配置更新事件（如果需要）
+        window.dispatchEvent(new CustomEvent('configUpdated', { 
+            detail: { company: key, config: freshConfig } 
+        }));
+        
     } catch (e) {
         console.error(`[refreshDbRuleCache] 刷新缓存失败:`, e);
+        throw e; // 重新抛出错误，让调用方知道刷新失败
     }
 }
 
@@ -479,64 +513,29 @@ export function getDateRangeForDefaultMonth(): { fromDate: string, toDate: strin
  * 注意：这是同步函数，用于兼容旧代码。新代码应使用 getAppConfigAsync
  */
 export function getAppConfig(companyKey: string): CompanyConfig {
-    // 首先检查是否有从数据库加载的规则缓存
     const normalizedKey = (companyKey === '海多多' || companyKey === 'hydodo') ? 'hydodo' : 'eyewind';
     const dbCacheKey = `DB_RULE_CONFIG_${normalizedKey}`;
-    const dbCached = localStorage.getItem(dbCacheKey);
     
+    // 🔥 优先检查数据库缓存
+    const dbCached = localStorage.getItem(dbCacheKey);
     if (dbCached) {
         try {
             const dbConfig = JSON.parse(dbCached);
-            // 将数据库格式转换为前端格式
             const converted = convertDbConfigToFrontend(dbConfig, normalizedKey);
             if (converted) {
+                console.log(`[getAppConfig] 使用数据库缓存配置: ${normalizedKey}`);
                 return converted;
             }
         } catch (e) {
             console.error("[getAppConfig] 解析数据库缓存失败:", e);
+            // 清除损坏的缓存
+            localStorage.removeItem(dbCacheKey);
         }
     }
     
-    // 降级到本地存储
-    try {
-        const stored = localStorage.getItem(CONFIG_KEY);
-        if (stored) {
-            const configs = JSON.parse(stored);
-            if (configs[normalizedKey]) {
-                const merged = { ...DEFAULT_CONFIGS[normalizedKey], ...configs[normalizedKey] };
-                // Ensure rules exist even if loaded from old config
-                if (!merged.rules) merged.rules = DEFAULT_CONFIGS[normalizedKey].rules;
-                // Deep merge rules to ensure all fields exist
-                if (merged.rules) {
-                    merged.rules = { ...DEFAULT_CONFIGS[normalizedKey].rules, ...merged.rules };
-                    // Ensure maxPerformancePenalty exists in case of old data
-                    if (merged.rules.maxPerformancePenalty === undefined) merged.rules.maxPerformancePenalty = 250;
-                    // Ensure performancePenaltyRules exists in case of old data
-                    if (!merged.rules.performancePenaltyRules) merged.rules.performancePenaltyRules = DEFAULT_CONFIGS[normalizedKey].rules!.performancePenaltyRules;
-                    // Ensure fullAttendanceRules exists in case of old data
-                    if (!merged.rules.fullAttendanceRules) merged.rules.fullAttendanceRules = DEFAULT_CONFIGS[normalizedKey].rules!.fullAttendanceRules;
-                    // Ensure lateExemptionEnabled exists in case of old data
-                    if (merged.rules.lateExemptionEnabled === undefined) merged.rules.lateExemptionEnabled = DEFAULT_CONFIGS[normalizedKey].rules!.lateExemptionEnabled;
-                    // Ensure fullAttendanceEnabled exists in case of old data
-                    if (merged.rules.fullAttendanceEnabled === undefined) merged.rules.fullAttendanceEnabled = DEFAULT_CONFIGS[normalizedKey].rules!.fullAttendanceEnabled;
-                    // Ensure performancePenaltyEnabled exists in case of old data
-                    if (merged.rules.performancePenaltyEnabled === undefined) merged.rules.performancePenaltyEnabled = DEFAULT_CONFIGS[normalizedKey].rules!.performancePenaltyEnabled;
-                    // Ensure performancePenaltyMode exists in case of old data
-                    if (merged.rules.performancePenaltyMode === undefined) merged.rules.performancePenaltyMode = 'capped';
-                    if (merged.rules.unlimitedPenaltyThresholdTime === undefined) merged.rules.unlimitedPenaltyThresholdTime = '09:01';
-                    if (merged.rules.unlimitedPenaltyCalcType === undefined) merged.rules.unlimitedPenaltyCalcType = 'perMinute';
-                    if (merged.rules.unlimitedPenaltyPerMinute === undefined) merged.rules.unlimitedPenaltyPerMinute = 5;
-                    if (merged.rules.unlimitedPenaltyFixedAmount === undefined) merged.rules.unlimitedPenaltyFixedAmount = 50;
-                    // Ensure cappedPenaltyType exists in case of old data
-                    if (merged.rules.cappedPenaltyType === undefined) merged.rules.cappedPenaltyType = 'ladder';
-                    if (merged.rules.cappedPenaltyPerMinute === undefined) merged.rules.cappedPenaltyPerMinute = 5;
-                }
-                return merged;
-            }
-        }
-    } catch (e) {
-        console.error("Error reading company config", e);
-    }
+    // 🔥 如果没有数据库缓存，直接使用默认配置，不使用旧的本地存储
+    // 这样可以避免使用过时的配置
+    console.log(`[getAppConfig] 使用默认配置: ${normalizedKey} (没有数据库缓存)`);
     return DEFAULT_CONFIGS[normalizedKey];
 }
 
@@ -567,6 +566,243 @@ const openDB = (): Promise<IDBDatabase> => {
         request.onerror = (event) => reject((event.target as IDBOpenDBRequest).error);
     });
 };
+
+// --- Enhanced Cache System for Holidays and Dashboard Data ---
+
+/**
+ * 节假日数据缓存管理器
+ * 节假日数据按年份缓存，长期有效
+ */
+export class HolidayCache {
+    private static readonly CACHE_PREFIX = 'HOLIDAY_CACHE_';
+    
+    /**
+     * 获取节假日数据，优先从缓存读取
+     */
+    static async getHolidays(year: number): Promise<any> {
+        const cacheKey = `${this.CACHE_PREFIX}${year}`;
+        
+        try {
+            // 1. 尝试从IndexedDB缓存读取
+            const cached = await SmartCache.get<any>(cacheKey);
+            if (cached) {
+                console.log(`[HolidayCache] 使用缓存的节假日数据: ${year}`);
+                return cached;
+            }
+            
+            // 2. 缓存未命中，从API获取
+            console.log(`[HolidayCache] 从API获取节假日数据: ${year}`);
+            const response = await fetch(`https://timor.tech/api/holiday/year/${year}`);
+            if (!response.ok) throw new Error('Failed to fetch holidays');
+            
+            const data = await response.json();
+            const holidayData = data.holiday || {};
+            
+            // 3. 存储到缓存（节假日数据长期有效，不设置过期时间）
+            await this.setHolidaysCache(year, holidayData);
+            
+            return holidayData;
+        } catch (error) {
+            console.warn(`[HolidayCache] 获取节假日数据失败: ${year}`, error);
+            return {};
+        }
+    }
+    
+    /**
+     * 设置节假日缓存（使用特殊的长期缓存）
+     */
+    private static async setHolidaysCache(year: number, data: any): Promise<void> {
+        const cacheKey = `${this.CACHE_PREFIX}${year}`;
+        
+        try {
+            const db = await openDB();
+            const item = {
+                data,
+                timestamp: Date.now(),
+                type: 'holiday', // 标记为节假日数据
+                year: year,
+                permanent: true // 标记为永久缓存
+            };
+            
+            return new Promise<void>((resolve, reject) => {
+                const transaction = db.transaction(STORE_NAME, 'readwrite');
+                const store = transaction.objectStore(STORE_NAME);
+                const request = store.put(item, cacheKey);
+                request.onsuccess = () => {
+                    console.log(`[HolidayCache] 节假日数据已缓存: ${year}`);
+                    resolve();
+                };
+                request.onerror = () => reject(request.error);
+            });
+        } catch (e) {
+            console.error('[HolidayCache] 缓存节假日数据失败', e);
+        }
+    }
+    
+    /**
+     * 清除指定年份的节假日缓存
+     */
+    static async clearHolidays(year: number): Promise<void> {
+        const cacheKey = `${this.CACHE_PREFIX}${year}`;
+        await SmartCache.remove(cacheKey);
+        console.log(`[HolidayCache] 已清除节假日缓存: ${year}`);
+    }
+}
+
+/**
+ * 考勤仪表盘数据缓存管理器
+ * 按公司+月份缓存，切换时自动清理
+ */
+export class DashboardCache {
+    private static readonly CACHE_PREFIX = 'DASHBOARD_CACHE_';
+    
+    /**
+     * 生成缓存键
+     */
+    private static getCacheKey(company: string, yearMonth: string): string {
+        return `${this.CACHE_PREFIX}${company}_${yearMonth}`;
+    }
+    
+    /**
+     * 获取仪表盘数据
+     */
+    static async getDashboardData(company: string, yearMonth: string): Promise<{
+        employees: DingTalkUser[];
+        companyCounts: CompanyCounts;
+        processDataMap: Record<string, any>;
+        attendanceMap: AttendanceMap;
+    } | null> {
+        const cacheKey = this.getCacheKey(company, yearMonth);
+        
+        try {
+            const cached = await SmartCache.get<any>(cacheKey);
+            if (cached) {
+                console.log(`[DashboardCache] ✅ 使用月份仪表盘缓存: ${company} - ${yearMonth}`);
+                console.log(`[DashboardCache] 📅 缓存包含数据: ${cached.employees?.length || 0} 个员工, ${Object.keys(cached.processDataMap || {}).length} 个审批详情`);
+                return cached;
+            }
+            return null;
+        } catch (error) {
+            console.error('[DashboardCache] 读取仪表盘缓存失败', error);
+            return null;
+        }
+    }
+    
+    /**
+     * 设置仪表盘数据缓存
+     */
+    static async setDashboardData(
+        company: string, 
+        yearMonth: string, 
+        data: {
+            employees: DingTalkUser[];
+            companyCounts: CompanyCounts;
+            processDataMap: Record<string, any>;
+            attendanceMap: AttendanceMap;
+        }
+    ): Promise<void> {
+        const cacheKey = this.getCacheKey(company, yearMonth);
+        
+        try {
+            const cacheData = {
+                ...data,
+                cachedAt: Date.now(),
+                company,
+                yearMonth,
+                type: 'dashboard'
+            };
+            
+            await SmartCache.set(cacheKey, cacheData);
+            console.log(`[DashboardCache] 💾 仪表盘数据已缓存到IndexedDB: ${company} - ${yearMonth}`);
+            console.log(`[DashboardCache] 📅 缓存内容: ${data.employees.length} 个员工, ${Object.keys(data.processDataMap).length} 个审批详情`);
+        } catch (error) {
+            console.error('[DashboardCache] 缓存仪表盘数据失败', error);
+        }
+    }
+    
+    /**
+     * 清除指定公司和月份的缓存
+     */
+    static async clearDashboardData(company: string, yearMonth: string): Promise<void> {
+        const cacheKey = this.getCacheKey(company, yearMonth);
+        await SmartCache.remove(cacheKey);
+        console.log(`[DashboardCache] 已清除仪表盘缓存: ${company} - ${yearMonth}`);
+    }
+    
+    /**
+     * 清除指定公司的所有缓存
+     */
+    static async clearCompanyData(company: string): Promise<void> {
+        try {
+            const db = await openDB();
+            const transaction = db.transaction(STORE_NAME, 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+            
+            // 获取所有键
+            const keysRequest = store.getAllKeys();
+            keysRequest.onsuccess = () => {
+                const keys = keysRequest.result;
+                const companyKeys = keys.filter(key => 
+                    typeof key === 'string' && 
+                    key.includes(`${this.CACHE_PREFIX}${company}_`)
+                );
+                
+                // 删除匹配的键
+                companyKeys.forEach(key => {
+                    store.delete(key);
+                });
+                
+                console.log(`[DashboardCache] 已清除公司所有缓存: ${company}, 清除 ${companyKeys.length} 个缓存项`);
+            };
+        } catch (error) {
+            console.error('[DashboardCache] 清除公司缓存失败', error);
+        }
+    }
+    
+    /**
+     * 获取缓存统计信息
+     */
+    static async getCacheStats(): Promise<{
+        totalItems: number;
+        dashboardItems: number;
+        holidayItems: number;
+        totalSize: number;
+    }> {
+        try {
+            const db = await openDB();
+            const transaction = db.transaction(STORE_NAME, 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            
+            return new Promise((resolve) => {
+                const request = store.getAll();
+                request.onsuccess = () => {
+                    const items = request.result;
+                    let dashboardItems = 0;
+                    let holidayItems = 0;
+                    let totalSize = 0;
+                    
+                    items.forEach(item => {
+                        const itemSize = JSON.stringify(item).length;
+                        totalSize += itemSize;
+                        
+                        if (item.type === 'dashboard') dashboardItems++;
+                        else if (item.type === 'holiday') holidayItems++;
+                    });
+                    
+                    resolve({
+                        totalItems: items.length,
+                        dashboardItems,
+                        holidayItems,
+                        totalSize
+                    });
+                };
+            });
+        } catch (error) {
+            console.error('[DashboardCache] 获取缓存统计失败', error);
+            return { totalItems: 0, dashboardItems: 0, holidayItems: 0, totalSize: 0 };
+        }
+    }
+}
 
 export class SmartCache {
     /**
@@ -1055,96 +1291,126 @@ export const getLateMinutes = (
     return Math.max(0, Math.floor((userTime - targetTime) / 60000));
 };
 
+// 🔥 全局请求管理器，防止重复调用
+const pendingRequests = new Map<string, Promise<any>>();
+
 export const fetchCompanyData = async (mainCompany: string, fromDate: string, toDate: string, year: number, month: number): Promise<{ employees: DingTalkUser[]; companyCounts: CompanyCounts }> => {
     // Cache Key includes company and date range
     const cacheKey = `ATTENDANCE_DATA_${mainCompany}_${fromDate}_${toDate}`;
 
+    // 🔥 检查是否有正在进行的相同请求
+    if (pendingRequests.has(cacheKey)) {
+        console.log(`[fetchCompanyData] ⏳ 等待进行中的请求: ${cacheKey}`);
+        return await pendingRequests.get(cacheKey);
+    }
+
     // 1. Try Cache First
     const cachedData = await SmartCache.get<{ employees: DingTalkUser[]; companyCounts: CompanyCounts }>(cacheKey);
     if (cachedData) {
+        console.log(`[fetchCompanyData] ✅ 使用月份缓存数据: ${cacheKey}, 员工数: ${cachedData.employees.length}`);
+        console.log(`[fetchCompanyData] 📅 缓存月份: ${fromDate} 至 ${toDate}`);
         return cachedData;
     }
 
-    // 2. Fetch if not cached or expired
-    const doFetch = async (forceRefresh = false) => {
-        const accessToken = await dingTalkTokenManager.getToken(mainCompany, forceRefresh);
+    console.log(`[fetchCompanyData] 🔄 缓存未命中，开始新的API请求: ${cacheKey}`);
+    
+    // 2. 创建新的请求Promise
+    const requestPromise = (async () => {
+        const doFetch = async (forceRefresh = false) => {
+            const accessToken = await dingTalkTokenManager.getToken(mainCompany, forceRefresh);
 
-        const employeesResponse = await fetch("https://sg.api.eyewind.cn/etl/dingding/employees", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ dingToken: accessToken }),
-        });
+            const employeesResponse = await fetch("http://localhost:5001/etl/dingding/employees", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ dingToken: accessToken }),
+            });
 
-        if (employeesResponse.status === 401 && !forceRefresh) throw new Error("401_RETRY");
-        if (!employeesResponse.ok) throw new Error(`获取 ${mainCompany} 员工列表失败: ${employeesResponse.status}`);
+            if (employeesResponse.status === 401 && !forceRefresh) throw new Error("401_RETRY");
+            if (!employeesResponse.ok) throw new Error(`获取 ${mainCompany} 员工列表失败: ${employeesResponse.status}`);
 
-        const employeesData = await employeesResponse.json();
-        if (employeesData.errcode === 40014) throw new Error("401_RETRY");
+            const employeesData = await employeesResponse.json();
+            if (employeesData.errcode === 40014) throw new Error("401_RETRY");
 
-        const { employees, companyCounts } = employeesData;
-        if (!employees || !Array.isArray(employees)) throw new Error(`${mainCompany} 员工API返回的数据格式不正确。`);
+            const { employees, companyCounts } = employeesData;
+            if (!employees || !Array.isArray(employees)) throw new Error(`${mainCompany} 员工API返回的数据格式不正确。`);
 
-        // Optimization: Map employees to a lighter structure for the punch API request
-        // Only send userid, name, and department as per requirements
-        const simplifiedEmployees = employees.map((e: DingTalkUser) => ({
-            userid: e.userid,
-            name: e.name,
-            department: e.department
-        }));
+            // Optimization: Map employees to a lighter structure for the punch API request
+            // Only send userid, name, and department as per requirements
+            const simplifiedEmployees = employees.map((e: DingTalkUser) => ({
+                userid: e.userid,
+                name: e.name,
+                department: e.department
+            }));
 
-        const punchResponse = await fetch("https://sg.api.eyewind.cn/etl/dingding/punch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                dingToken: accessToken,
-                employees: simplifiedEmployees, // Use the simplified list
-                year: year,
-                month: month,
-            }),
-        });
+            const punchResponse = await fetch("http://localhost:5001/etl/dingding/punch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    dingToken: accessToken,
+                    employees: simplifiedEmployees, // Use the simplified list
+                    fromDate: fromDate,
+                    toDate: toDate,
+                }),
+            });
 
-        if (punchResponse.status === 401 && !forceRefresh) throw new Error("401_RETRY");
+            if (punchResponse.status === 401 && !forceRefresh) throw new Error("401_RETRY");
 
-        let punchData = {};
-        if (!punchResponse.ok) {
-            console.warn(`获取 ${mainCompany} 的打卡数据请求失败`);
-        } else {
-            const punchResult = await punchResponse.json();
-            if (punchResult.errcode === 40014 && !forceRefresh) throw new Error("401_RETRY");
+            let punchData = {};
+            if (!punchResponse.ok) {
+                console.warn(`获取 ${mainCompany} 的打卡数据请求失败`);
+            } else {
+                const punchResult = await punchResponse.json();
+                if (punchResult.errcode === 40014 && !forceRefresh) throw new Error("401_RETRY");
 
-            if (punchResult.success && Array.isArray(punchResult.data)) {
-                punchData = punchResult.data.reduce((acc: Record<string, PunchRecord[]>, record: PunchRecord) => {
-                    const uid = record.userId;
-                    if (!acc[uid]) acc[uid] = [];
-                    acc[uid].push(record);
-                    return acc;
-                }, {});
+                if (punchResult.success && Array.isArray(punchResult.data)) {
+                    punchData = punchResult.data.reduce((acc: Record<string, PunchRecord[]>, record: PunchRecord) => {
+                        const uid = record.userId;
+                        if (!acc[uid]) acc[uid] = [];
+                        acc[uid].push(record);
+                        return acc;
+                    }, {});
+                }
             }
+
+            const employeesWithPunchData = employees.map((employee: DingTalkUser) => ({
+                ...employee,
+                punchData: punchData[employee.userid] || [],
+            }));
+
+            const result = { employees: employeesWithPunchData as DingTalkUser[], companyCounts: companyCounts as CompanyCounts };
+
+            // 3. Save to Cache
+            await SmartCache.set(cacheKey, result);
+            console.log(`[fetchCompanyData] 💾 考勤数据已缓存到IndexedDB: ${cacheKey}`);
+            console.log(`[fetchCompanyData] 📅 缓存月份范围: ${fromDate} 至 ${toDate}`);
+            
+            // OPTIMIZATION: Also cache the raw employee list for other components (like AttendancePage) to reuse without re-fetching
+            // AttendancePage uses this specific key to look for employees.
+            await SmartCache.set(`EMPLOYEES_LIST_${mainCompany}`, employees);
+
+            console.log(`[fetchCompanyData] API请求完成: ${cacheKey}, 员工数: ${employees.length}`);
+            return result;
+        };
+
+        try {
+            const result = await doFetch(false);
+            return result;
+        } catch (error) {
+            if (error instanceof Error && error.message === "401_RETRY") {
+                return await doFetch(true);
+            }
+            throw error;
         }
+    })();
 
-        const employeesWithPunchData = employees.map((employee: DingTalkUser) => ({
-            ...employee,
-            punchData: punchData[employee.userid] || [],
-        }));
-
-        const result = { employees: employeesWithPunchData as DingTalkUser[], companyCounts: companyCounts as CompanyCounts };
-
-        // 3. Save to Cache
-        await SmartCache.set(cacheKey, result);
-        
-        // OPTIMIZATION: Also cache the raw employee list for other components (like AttendancePage) to reuse without re-fetching
-        // AttendancePage uses this specific key to look for employees.
-        await SmartCache.set(`EMPLOYEES_LIST_${mainCompany}`, employees);
-
-        return result;
-    };
+    // 🔥 缓存请求Promise
+    pendingRequests.set(cacheKey, requestPromise);
 
     try {
-        return await doFetch(false);
-    } catch (error) {
-        if (error instanceof Error && error.message === "401_RETRY") {
-            return await doFetch(true);
-        }
-        throw error;
+        const result = await requestPromise;
+        return result;
+    } finally {
+        // 🔥 请求完成后清除缓存
+        pendingRequests.delete(cacheKey);
     }
 };
 

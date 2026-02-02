@@ -11,7 +11,7 @@ import { AttendanceCalendarView } from './AttendanceCalendar.tsx';
 import { EmployeeTableView } from './AttendanceEmployeeList.tsx';
 import { EmployeeDetailModal, PunchDetailModal, EmployeeAttendanceAnalysisModal } from './AttendanceModals.tsx';
 import { AttendanceEditLogs } from './AttendanceEditLogs.tsx';
-import { fetchCompanyData, fetchProcessDetail, SmartCache, getLateMinutes, calculateDailyLeaveDuration, checkTimeInLeaveRange } from '../utils.ts';
+import { fetchCompanyData, fetchProcessDetail, SmartCache, HolidayCache, DashboardCache, getLateMinutes, calculateDailyLeaveDuration, checkTimeInLeaveRange } from '../utils.ts';
 import { sendDingTalkMessage, validateDingTalkWebhook, type AtUser } from '../../../services/pushApiService.ts';
 import type { AttendanceDashboardState } from '../../../App.tsx';
 import { db } from '../../../database/mockDb.ts';
@@ -239,74 +239,134 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   // 🔥 使用ref避免循环依赖
   const loadAllDataRef = useRef<(() => Promise<void>) | null>(null);
   
-  // 🔥 统一的数据加载函数，避免重复调用
+  // 🔥 统一的数据加载函数，智能使用多层缓存
+  // 三层缓存策略：
+  // 1. 完整仪表盘缓存 (DashboardCache) - 包含员工、公司统计、审批详情的完整数据
+  // 2. 员工打卡数据缓存 (SmartCache) - 只包含员工和打卡数据，用于跨页面共享
+  // 3. API调用 - 最后的数据源
+  // 
+  // 缓存协调逻辑：
+  // - 如果有完整仪表盘缓存，直接使用，无需任何API调用
+  // - 如果有员工打卡数据缓存，复用该数据，只获取审批详情
+  // - 如果都没有，从API获取所有数据
   const loadAllData = useCallback(async (forceRefresh = false, isSilent = false) => {
-    // 🔥 防止重复调用，但允许规则配置加载完成后的首次调用
-    // if (!isSilent) {
-    //   console.log('[AttendanceDashboardPage] 数据正在加载中，跳过重复调用');
-    //   return;
-    // }
-    
-    // 🔥 如果是首次加载（规则配置完成后），允许执行即使isLoading为true
-    // if (isLoading) {
-    //   console.log('[AttendanceDashboardPage] 规则配置未完成，等待规则配置加载');
-    //   return;
-    // }
-    
     console.log(`[AttendanceDashboardPage] 🚀 开始加载数据: 公司=${currentCompany}, 月份=${globalMonth}, 强制刷新=${forceRefresh}`);
     
     setLoadingDebounce(true);
     
-    const fromDate = `${globalMonth}-01`;
-    const [y, m] = globalMonth.split('-').map(Number);
-    const lastDayDate = new Date(y, m, 0);
-    const lastDay = lastDayDate.getDate();
-    const toDate = `${globalMonth}-${String(lastDay).padStart(2, '0')}`;
-    const cacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
-
-    let cachedData: { employees: DingTalkUser[]; companyCounts: CompanyCounts } | null = null;
+    // 🔥 第一层：检查仪表盘完整缓存
+    let cachedDashboardData = null;
     if (!forceRefresh) {
-      cachedData = await SmartCache.get<{ employees: DingTalkUser[]; companyCounts: CompanyCounts }>(cacheKey);
+      cachedDashboardData = await DashboardCache.getDashboardData(currentCompany, globalMonth);
+      if (cachedDashboardData) {
+        console.log(`[AttendanceDashboardPage] ✅ 使用完整仪表盘缓存: ${currentCompany} - ${globalMonth}`);
+        setAllUsers(cachedDashboardData.employees);
+        setCompanyCounts(cachedDashboardData.companyCounts);
+        setProcessDataMap(cachedDashboardData.processDataMap);
+        setIsLoading(false);
+        setIsRefreshing(false);
+        setTimeout(() => setLoadingDebounce(false), 500);
+        return;
+      }
     }
 
-    if (!isSilent && !cachedData) setIsLoading(true);
+    if (!isSilent) setIsLoading(true);
     if (forceRefresh) setIsRefreshing(true);
     setError(null);
 
-    if (forceRefresh) await SmartCache.remove(cacheKey);
+    // 🔥 如果强制刷新，清除相关缓存
+    if (forceRefresh) {
+      await DashboardCache.clearDashboardData(currentCompany, globalMonth);
+    }
 
     try {
-      let data = cachedData;
-      if (!data) {
-        console.log(`[AttendanceDashboardPage] 从API加载数据: ${currentCompany}, ${fromDate} - ${toDate}`);
-        data = await fetchCompanyData(currentCompany, fromDate, toDate, y, m);
-      } else {
-        console.log(`[AttendanceDashboardPage] 使用缓存数据: ${currentCompany}, ${fromDate} - ${toDate}`);
+      // 🔥 第二层：检查员工和打卡数据缓存
+      const fromDate = `${globalMonth}-01`;
+      const [y, m] = globalMonth.split('-').map(Number);
+      const lastDayDate = new Date(y, m, 0);
+      const lastDay = lastDayDate.getDate();
+      const toDate = `${globalMonth}-${String(lastDay).padStart(2, '0')}`;
+      
+      const employeePunchCacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
+      let employeePunchData = null;
+      
+      if (!forceRefresh) {
+        employeePunchData = await SmartCache.get<{ employees: DingTalkUser[]; companyCounts: CompanyCounts }>(employeePunchCacheKey);
+        if (employeePunchData) {
+          console.log(`[AttendanceDashboardPage] 🎯 发现员工打卡数据缓存: ${employeePunchCacheKey}`);
+        } else {
+          console.log(`[AttendanceDashboardPage] ❌ 未发现员工打卡数据缓存: ${employeePunchCacheKey}`);
+        }
       }
 
-      const uniqueUsers = Array.from(new Map(data.employees.map(u => [u.userid, u])).values());
+      let uniqueUsers: DingTalkUser[];
+      let companyCounts: CompanyCounts;
+
+      if (employeePunchData) {
+        // 🔥 使用员工和打卡数据缓存
+        console.log(`[AttendanceDashboardPage] ✅ 使用员工打卡数据缓存，只需获取审批详情`);
+        console.log(`[AttendanceDashboardPage] 📊 缓存数据统计: ${employeePunchData.employees.length} 个员工, ${Object.keys(employeePunchData.companyCounts).length} 个公司`);
+        uniqueUsers = Array.from(new Map(employeePunchData.employees.map(u => [u.userid, u])).values());
+        companyCounts = employeePunchData.companyCounts;
+      } else {
+        // 🔥 从API获取员工和打卡数据
+        console.log(`[AttendanceDashboardPage] 📡 从API获取员工和打卡数据: ${currentCompany}, ${globalMonth}`);
+        console.log(`[AttendanceDashboardPage] 🔄 缓存未命中，需要重新请求员工和打卡接口`);
+        const data = await fetchCompanyData(currentCompany, fromDate, toDate, y, m);
+        uniqueUsers = Array.from(new Map(data.employees.map(u => [u.userid, u])).values());
+        companyCounts = data.companyCounts;
+        console.log(`[AttendanceDashboardPage] 📊 API数据统计: ${uniqueUsers.length} 个员工, ${Object.keys(companyCounts).length} 个公司`);
+      }
+
+      // 🔥 第三层：获取审批详情数据（这部分总是需要检查的）
+      console.log(`[AttendanceDashboardPage] 📋 检查审批详情数据...`);
       const neededIds = new Set<string>();
-      uniqueUsers.forEach(user => { user.punchData?.forEach(record => { if (record.procInstId) neededIds.add(record.procInstId); }); });
+      uniqueUsers.forEach(user => { 
+        user.punchData?.forEach(record => { 
+          if (record.procInstId) neededIds.add(record.procInstId); 
+        }); 
+      });
 
       const idsToFetch = Array.from(neededIds);
       const newProcessData: Record<string, any> = {};
-      if (idsToFetch.length > 0) {
-          const BATCH_SIZE = 20;
-          for (let i = 0; i < idsToFetch.length; i += BATCH_SIZE) {
-              const chunk = idsToFetch.slice(i, i + BATCH_SIZE);
-              await Promise.all(chunk.map(async (id) => {
-                  const pData = await fetchProcessDetail(id, currentCompany);
-                  if (pData) newProcessData[id] = pData;
-              }));
-          }
-      }
-      setAllUsers(uniqueUsers);
-      setCompanyCounts(data.companyCounts);
-      setProcessDataMap(prev => ({ ...prev, ...newProcessData }));
       
-      console.log(`[AttendanceDashboardPage] 数据加载完成: ${uniqueUsers.length} 个用户`);
-      console.log(`[AttendanceDashboardPage] 公司统计:`, data.companyCounts);
-      console.log(`[AttendanceDashboardPage] 流程数据:`, Object.keys(newProcessData).length, '个流程');
+      if (idsToFetch.length > 0) {
+        console.log(`[AttendanceDashboardPage] 📋 获取 ${idsToFetch.length} 个审批详情...`);
+        const BATCH_SIZE = 20;
+        for (let i = 0; i < idsToFetch.length; i += BATCH_SIZE) {
+          const chunk = idsToFetch.slice(i, i + BATCH_SIZE);
+          await Promise.all(chunk.map(async (id) => {
+            const pData = await fetchProcessDetail(id, currentCompany);
+            if (pData) newProcessData[id] = pData;
+          }));
+        }
+        console.log(`[AttendanceDashboardPage] ✅ 审批详情获取完成: ${Object.keys(newProcessData).length} 个`);
+      } else {
+        console.log(`[AttendanceDashboardPage] ℹ️ 无需获取审批详情`);
+      }
+
+      // 设置状态
+      setAllUsers(uniqueUsers);
+      setCompanyCounts(companyCounts);
+      setProcessDataMap(newProcessData);
+
+      // 🔥 缓存完整的仪表盘数据到IndexedDB
+      const dashboardData = {
+        employees: uniqueUsers,
+        companyCounts: companyCounts,
+        processDataMap: newProcessData,
+        attendanceMap: {} as AttendanceMap // 这个会通过 useAttendanceStats 计算
+      };
+      
+      await DashboardCache.setDashboardData(currentCompany, globalMonth, dashboardData);
+      console.log(`[AttendanceDashboardPage] 💾 仪表盘数据已缓存`);
+      
+      // 🔥 如果使用了缓存的员工打卡数据，说明缓存协调工作正常
+      if (employeePunchData) {
+        console.log(`[AttendanceDashboardPage] ✅ 缓存协调成功：复用员工打卡数据，仅获取审批详情`);
+      }
+      
+      console.log(`[AttendanceDashboardPage] ✅ 数据加载完成: ${uniqueUsers.length} 个用户, ${Object.keys(newProcessData).length} 个审批详情`);
     } catch (err) {
       console.error('[AttendanceDashboardPage] 数据加载失败:', err);
       if (!isSilent) setError(err instanceof Error ? err.message : "加载数据失败，请稍后重试。");
@@ -316,41 +376,58 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       // 🔥 延迟重置防抖状态，防止快速重复调用
       setTimeout(() => setLoadingDebounce(false), 1000);
     }
-  }, [globalMonth, currentCompany, isLoading, loadingDebounce, ruleConfigLoaded]); // 🔥 添加ruleConfigLoaded依赖 
+  }, [globalMonth, currentCompany, isLoading, loadingDebounce, ruleConfigLoaded]); 
 
   // 🔥 更新ref引用
   useEffect(() => {
     loadAllDataRef.current = loadAllData;
   }, [loadAllData]);
 
-  // 🔥 监听公司和月份变化，清理相关缓存
+  // 🔥 监听公司和月份变化，清理相关缓存（只在真正变化时清理）
+  const [lastCompanyMonth, setLastCompanyMonth] = useState<string>(`${currentCompany}_${globalMonth}`);
+  
   useEffect(() => {
-    const clearRelatedCaches = async () => {
-      console.log(`[AttendanceDashboardPage] 🔥 公司或月份变化检测到，清理相关缓存: ${currentCompany}, ${globalMonth}`);
-      
-      // 清理考勤数据缓存
-      const fromDate = `${globalMonth}-01`;
-      const [y, m] = globalMonth.split('-').map(Number);
-      const lastDayDate = new Date(y, m, 0);
-      const lastDay = lastDayDate.getDate();
-      const toDate = `${globalMonth}-${String(lastDay).padStart(2, '0')}`;
-      const attendanceDataCacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
-      const attendanceMapCacheKey = `ATTENDANCE_MAP_CACHE_${currentCompany}_${globalMonth}`;
-      
-      await SmartCache.remove(attendanceDataCacheKey);
-      await SmartCache.remove(attendanceMapCacheKey);
-      
-      // 重置状态
-      setAllUsers([]);
-      setCompanyCounts({});
-      setAttendanceMap({});
-      setProcessDataMap({});
-      setError(null);
-      
-      console.log(`[AttendanceDashboardPage] ✅ 缓存清理完成，准备重新加载数据`);
-    };
+    const currentKey = `${currentCompany}_${globalMonth}`;
     
-    clearRelatedCaches();
+    // 🔥 只有在公司或月份真正发生变化时才清理缓存（跳过初始化）
+    if (lastCompanyMonth !== currentKey && lastCompanyMonth !== `${currentCompany}_${globalMonth}`) {
+      const clearRelatedCaches = async () => {
+        console.log(`[AttendanceDashboardPage] 🔥 公司或月份变化检测到，清理相关缓存: ${lastCompanyMonth} -> ${currentKey}`);
+        
+        // 🔥 使用新的仪表盘缓存清理系统
+        await DashboardCache.clearDashboardData(currentCompany, globalMonth);
+        
+        // 清理旧的缓存键（兼容性）
+        const fromDate = `${globalMonth}-01`;
+        const [y, m] = globalMonth.split('-').map(Number);
+        const lastDayDate = new Date(y, m, 0);
+        const lastDay = lastDayDate.getDate();
+        const toDate = `${globalMonth}-${String(lastDay).padStart(2, '0')}`;
+        const attendanceDataCacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
+        const attendanceMapCacheKey = `ATTENDANCE_MAP_CACHE_${currentCompany}_${globalMonth}`;
+        
+        await SmartCache.remove(attendanceDataCacheKey);
+        await SmartCache.remove(attendanceMapCacheKey);
+        
+        // 重置状态
+        setAllUsers([]);
+        setCompanyCounts({});
+        setAttendanceMap({});
+        setProcessDataMap({});
+        setError(null);
+        
+        console.log(`[AttendanceDashboardPage] ✅ 缓存清理完成，准备重新加载数据`);
+      };
+      
+      clearRelatedCaches();
+    } else if (lastCompanyMonth === currentKey) {
+      console.log(`[AttendanceDashboardPage] ℹ️ 公司和月份未变化，保持缓存: ${currentKey}`);
+    } else {
+      console.log(`[AttendanceDashboardPage] 🚀 初始化加载，不清理缓存: ${currentKey}`);
+    }
+    
+    // 🔥 更新最后的公司月份组合
+    setLastCompanyMonth(currentKey);
   }, [currentCompany, globalMonth]); // 🔥 监听公司和月份变化
 
   // 🔥 初始化规则配置缓存（在加载数据之前）
@@ -465,11 +542,12 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   useEffect(() => {
     const fetchHolidays = async () => {
       try {
-        const response = await fetch(`https://timor.tech/api/holiday/year/${year}`);
-        if (!response.ok) throw new Error('Failed to fetch holidays');
-        const data = await response.json();
-        if (data.holiday) setHolidays(data.holiday);
-      } catch (error) { console.warn('Failed to fetch holidays', error); }
+        // 🔥 使用新的节假日缓存系统
+        const holidayData = await HolidayCache.getHolidays(year);
+        setHolidays(holidayData);
+      } catch (error) { 
+        console.warn('Failed to fetch holidays', error); 
+      }
     };
     fetchHolidays();
   }, [year]);
@@ -1206,8 +1284,13 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   };
 
   const handleManualRefresh = async () => {
+    // 🔥 使用新的缓存清理系统
+    await DashboardCache.clearDashboardData(currentCompany, globalMonth);
+    
+    // 清理旧的缓存键（兼容性）
     const cacheKey = `ATTENDANCE_MAP_CACHE_${currentCompany}_${globalMonth}`;
     await SmartCache.remove(cacheKey); 
+    
     loadAllData(true);
   };
 

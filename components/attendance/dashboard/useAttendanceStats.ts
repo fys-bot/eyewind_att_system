@@ -67,8 +67,8 @@ function getShouldAttendanceDays(companyKey: string, workdaysCount: number, holi
     // 根据计算方法返回应出勤天数
     switch (rules.shouldAttendanceCalcMethod) {
         case 'fixed':
-            // 使用固定天数
-            const fixedDays = rules.fixedShouldAttendanceDays ?? workdaysCount;
+            // 使用固定天数，如果没有设置则使用22天作为默认值
+            const fixedDays = rules.fixedShouldAttendanceDays ?? 22;
             console.log(`[getShouldAttendanceDays] 使用固定天数: ${fixedDays}`);
             return fixedDays;
         case 'custom':
@@ -619,7 +619,7 @@ export const useAttendanceStats = (
                 });
             }
             
-            // 🔥 计算实际出勤天数：从截至今天的工作日中减去请假天数
+            // 🔥 计算实际出勤天数：应出勤天数 - 各类请假天数（除了调休和出差）
             // 使用小时数除以每日工作时长来计算请假天数
             const dailyHours = (company?.includes('成都') ? 8.5 : 8);
             const sickDays = Math.ceil((stats.sickHours || 0) / dailyHours);
@@ -632,10 +632,12 @@ export const useAttendanceStats = (
             const parentalDays = Math.ceil((stats.parentalHours || 0) / dailyHours);
             const marriageDays = Math.ceil((stats.marriageHours || 0) / dailyHours);
             
+            // 🔥 修复：实际出勤天数 = 应出勤天数 - 各类请假天数（不包括调休和出差）
+            // 调休(compTime)和出差(trip)不应该减少实际出勤天数，因为它们算作正常出勤
             const totalLeaveDays = sickDays + seriousSickDays + personalDays + annualDays + 
                                    bereavementDays + maternityDays + paternityDays + parentalDays + marriageDays;
             
-            stats.actualAttendanceDays = Math.max(0, (stats.actualAttendanceDays || 0) - totalLeaveDays);
+            stats.actualAttendanceDays = Math.max(0, stats.shouldAttendanceDays - totalLeaveDays);
 
             // 🔥 使用规则引擎计算绩效扣款（在所有日期处理完成后）
             stats.performancePenalty = ruleEngine.calculatePerformancePenalty(stats.exemptedLateMinutes || 0);

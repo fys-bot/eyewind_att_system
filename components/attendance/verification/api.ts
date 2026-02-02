@@ -90,7 +90,7 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
 /** 2、获取所有员工id */
 export async function fetchAllEmployees(mainCompany: string): Promise<any[]> {
-    const userUrl = `https://sg.api.eyewind.cn/etl/dingding/employees`;
+    const userUrl = `http://localhost:5001/etl/dingding/employees`;
     
     // 🔥 检查缓存
     const cacheKey = `employees_${mainCompany}`;

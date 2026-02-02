@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import type { DingTalkUser, EmployeeStats } from '../../../database/schema.ts';
 import { Loader2Icon, RefreshCwIcon, SparklesIcon, ChevronRightIcon, XIcon } from '../../Icons.tsx';
 import { EmployeeTableView } from '../dashboard/AttendanceEmployeeList.tsx';
@@ -15,6 +15,9 @@ export const EmployeeListPage: React.FC<{ currentCompany: string; onLoadingChang
     const [isLoading, setIsLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    
+    // 🔥 添加防重复调用的引用
+    const loadingRef = useRef<boolean>(false);
     
     // For Detail Modal
     const [detailUserStack, setDetailUserStack] = useState<DingTalkUser[]>([]);
@@ -140,6 +143,13 @@ ${selectedDepartment === '全部'
     };
 
     const loadData = async (forceRefresh = false) => {
+        // 🔥 防重复调用检查
+        if (loadingRef.current && !forceRefresh) {
+            console.log(`[EmployeeListPage] 数据正在加载中，跳过重复请求: ${currentCompany}`);
+            return;
+        }
+        
+        loadingRef.current = true;
         setIsLoading(true);
         if (forceRefresh) setIsRefreshing(true);
         setError(null);
@@ -147,21 +157,33 @@ ${selectedDepartment === '全部'
         // Get standard date range based on 1-5th rule
         const { fromDate, toDate, year, month } = getDateRangeForDefaultMonth();
 
-        if (forceRefresh) {
-            const cacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
-            await SmartCache.remove(cacheKey);
-        }
-
         try {
-            // We use fetchCompanyData to get the employee list. 
-            // It fetches punch data too, which is fine as it enriches the user object (for last punch etc if needed later)
-            const data = await fetchCompanyData(currentCompany, fromDate, toDate, year, month);
-            const uniqueUsers = Array.from(new Map(data.employees.map(u => [u.userid, u])).values());
+            // 🔥 优化：先尝试从缓存获取员工列表，避免重复API调用
+            const employeesCacheKey = `EMPLOYEES_LIST_${currentCompany}`;
+            let employees = await SmartCache.get<DingTalkUser[]>(employeesCacheKey);
+            
+            // 如果没有缓存或强制刷新，才调用完整的 fetchCompanyData
+            if (!employees || forceRefresh) {
+                if (forceRefresh) {
+                    const cacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
+                    await SmartCache.remove(cacheKey);
+                    await SmartCache.remove(employeesCacheKey);
+                }
+                
+                console.log(`[EmployeeListPage] 从API加载员工数据: ${currentCompany}`);
+                const data = await fetchCompanyData(currentCompany, fromDate, toDate, year, month);
+                employees = data.employees;
+            } else {
+                console.log(`[EmployeeListPage] 使用缓存的员工数据: ${currentCompany}`);
+            }
+            
+            const uniqueUsers = Array.from(new Map(employees.map(u => [u.userid, u])).values());
             setAllUsers(uniqueUsers);
         } catch (err) {
             console.error(err);
             setError(err instanceof Error ? err.message : "加载数据失败。");
         } finally {
+            loadingRef.current = false;
             setIsLoading(false);
             setIsRefreshing(false);
         }
