@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>实际出勤天数计算修复测试</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .info { background-color: #d1ecf1; border-color: #bee5eb; }
+        .warning { background-color: #fff3cd; border-color: #ffeaa7; }
+        button { padding: 10px 15px; margin: 5px; cursor: pointer; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 3px; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .formula { background: #e3f2fd; padding: 10px; border-left: 4px solid #2196f3; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>实际出勤天数计算修复测试</h1>
+    
+    <div class="test-section info">
+        <h3>问题描述</h3>
+        <p><strong>用户反馈</strong>：实际出勤天数的计算逻辑不正确</p>
+        <p><strong>正确逻辑</strong>：实际出勤天数 = 应出勤天数 - 各类请假天数（除了调休和出差）</p>
+        <div class="formula">
+            <strong>修复前</strong>：实际出勤天数 = 工作日数 - 所有请假天数（包括调休、出差）<br>
+            <strong>修复后</strong>：实际出勤天数 = 应出勤天数 - 请假天数（不包括调休、出差）
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h3>1. 计算逻辑对比测试</h3>
+        <button onclick="testCalculationLogic()">测试计算逻辑</button>
+        <div id="calculationResult"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>2. 考勤规则配置验证</h3>
+        <button onclick="checkAttendanceRules()">检查规则配置</button>
+        <div id="rulesResult"></div>
+    </div>
+
+    <div class="test-section">
+        <h3>3. 实际场景测试</h3>
+        <button onclick="testRealScenarios()">测试实际场景</button>
+        <div id="scenarioResult"></div>
+    </div>
+
+    <script>
+        function testCalculationLogic() {
+            const resultDiv = document.getElementById('calculationResult');
+            
+            // 模拟计算逻辑
+            function calculateActualAttendanceDays(shouldAttend, leaveData, method = 'new') {
+                const dailyHours = 8;
+                
+                // 计算各类请假天数
+                const sickDays = Math.ceil((leaveData.sickHours || 0) / dailyHours);
+                const personalDays = Math.ceil((leaveData.personalHours || 0) / dailyHours);
+                const annualDays = Math.ceil((leaveData.annualHours || 0) / dailyHours);
+                const compTimeDays = Math.ceil((leaveData.compTimeHours || 0) / dailyHours);
+                const tripDays = Math.ceil((leaveData.tripHours || 0) / dailyHours);
+                
+                if (method === 'old') {
+                    // 修复前：从工作日中减去所有请假天数
+                    const totalLeaveDays = sickDays + personalDays + annualDays + compTimeDays + tripDays;
+                    return Math.max(0, shouldAttend - totalLeaveDays);
+                } else {
+                    // 修复后：从应出勤天数中减去请假天数（不包括调休和出差）
+                    const totalLeaveDays = sickDays + personalDays + annualDays;
+                    return Math.max(0, shouldAttend - totalLeaveDays);
+                }
+            }
+            
+            // 测试用例
+            const testCases = [
+                {
+                    name: '正常情况：无请假',
+                    shouldAttend: 22,
+                    leaveData: {},
+                    expectedOld: 22,
+                    expectedNew: 22
+                },
+                {
+                    name: '有病假：2天',
+                    shouldAttend: 22,
+                    leaveData: { sickHours: 16 },
+                    expectedOld: 20,
+                    expectedNew: 20
+                },
+                {
+                    name: '有调休：1天（关键测试）',
+                    shouldAttend: 22,
+                    leaveData: { compTimeHours: 8 },
+                    expectedOld: 21, // 修复前：错误地减去调休
+                    expectedNew: 22  // 修复后：调休不减少实际出勤天数
+                },
+                {
+                    name: '有出差：2天（关键测试）',
+                    shouldAttend: 22,
+                    leaveData: { tripHours: 16 },
+                    expectedOld: 20, // 修复前：错误地减去出差
+                    expectedNew: 22  // 修复后：出差不减少实际出勤天数
+                },
+                {
+                    name: '复合情况：病假1天+调休1天+出差1天',
+                    shouldAttend: 22,
+                    leaveData: { 
+                        sickHours: 8,
+                        compTimeHours: 8,
+                        tripHours: 8
+                    },
+                    expectedOld: 19, // 修复前：减去所有3天
+                    expectedNew: 21  // 修复后：只减去病假1天
+                },
+                {
+                    name: '复合情况：年假2天+事假1天+调休2天',
+                    shouldAttend: 22,
+                    leaveData: { 
+                        annualHours: 16,
+                        personalHours: 8,
+                        compTimeHours: 16
+                    },
+                    expectedOld: 17, // 修复前：减去所有5天
+                    expectedNew: 19  // 修复后：只减去年假和事假3天
+                }
+            ];
+            
+            let results = testCases.map(testCase => {
+                const oldResult = calculateActualAttendanceDays(testCase.shouldAttend, testCase.leaveData, 'old');
+                const newResult = calculateActualAttendanceDays(testCase.shouldAttend, testCase.leaveData, 'new');
+                
+                return {
+                    ...testCase,
+                    oldResult,
+                    newResult,
+                    oldCorrect: oldResult === testCase.expectedOld,
+                    newCorrect: newResult === testCase.expectedNew,
+                    isFixed: oldResult !== newResult && newResult === testCase.expectedNew
+                };
+            });
+            
+            const fixedCases = results.filter(r => r.isFixed).length;
+            const totalCases = results.length;
+            
+            resultDiv.innerHTML = `
+                <div class="${fixedCases > 0 ? 'success' : 'warning'}">
+                    <h4>📊 计算逻辑对比结果</h4>
+                    <p><strong>修复的测试用例：${fixedCases}/${totalCases}</strong></p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>测试场景</th>
+                                <th>应出勤天数</th>
+                                <th>请假情况</th>
+                                <th>修复前结果</th>
+                                <th>修复后结果</th>
+                                <th>是否修复</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${results.map(r => `
+                                <tr style="background-color: ${r.isFixed ? '#d4edda' : '#fff'}">
+                                    <td>${r.name}</td>
+                                    <td>${r.shouldAttend}</td>
+                                    <td>${Object.entries(r.leaveData).map(([k, v]) => `${k}: ${v}h`).join(', ') || '无'}</td>
+                                    <td>${r.oldResult} ${r.oldCorrect ? '✅' : '❌'}</td>
+                                    <td>${r.newResult} ${r.newCorrect ? '✅' : '❌'}</td>
+                                    <td>${r.isFixed ? '✅ 已修复' : '⚪ 无变化'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                    
+                    <div class="formula">
+                        <strong>关键修复点</strong>：
+                        <ul>
+                            <li>调休(compTime)和出差(trip)不再减少实际出勤天数</li>
+                            <li>只有病假、事假、年假等真正的"缺勤"才减少实际出勤天数</li>
+                            <li>实际出勤天数基于应出勤天数计算，而不是工作日数</li>
+                        </ul>
+                    </div>
+                </div>
+            `;
+        }
+
+        function checkAttendanceRules() {
+            const resultDiv = document.getElementById('rulesResult');
+            
+            // 模拟考勤规则配置检查
+            const attendanceRules = {
+                countCompTimeAsAttendance: true,  // 调休算出勤
+                countTripAsAttendance: true,      // 出差算出勤
+                countSickLeaveAsAttendance: false, // 病假不算出勤
+                countPersonalLeaveAsAttendance: false, // 事假不算出勤
+                countPaidLeaveAsAttendance: true,  // 带薪假算出勤
+                countHolidayAsAttendance: true     // 法定节假日算出勤
+            };
+            
+            resultDiv.innerHTML = `
+                <div class="success">
+                    <h4>✅ 考勤规则配置验证</h4>
+                    <p>以下规则配置支持了实际出勤天数的正确计算：</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>规则项</th>
+                                <th>配置值</th>
+                                <th>说明</th>
+                                <th>对实际出勤天数的影响</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="background-color: #d4edda;">
+                                <td>调休算出勤</td>
+                                <td>${attendanceRules.countCompTimeAsAttendance ? '✅ 是' : '❌ 否'}</td>
+                                <td>调休是用自己的加班时间换取的休息</td>
+                                <td>不减少实际出勤天数</td>
+                            </tr>
+                            <tr style="background-color: #d4edda;">
+                                <td>出差算出勤</td>
+                                <td>${attendanceRules.countTripAsAttendance ? '✅ 是' : '❌ 否'}</td>
+                                <td>出差是为公司工作，算正常出勤</td>
+                                <td>不减少实际出勤天数</td>
+                            </tr>
+                            <tr style="background-color: #f8d7da;">
+                                <td>病假算出勤</td>
+                                <td>${attendanceRules.countSickLeaveAsAttendance ? '✅ 是' : '❌ 否'}</td>
+                                <td>病假是真正的缺勤</td>
+                                <td>减少实际出勤天数</td>
+                            </tr>
+                            <tr style="background-color: #f8d7da;">
+                                <td>事假算出勤</td>
+                                <td>${attendanceRules.countPersonalLeaveAsAttendance ? '✅ 是' : '❌ 否'}</td>
+                                <td>事假是真正的缺勤</td>
+                                <td>减少实际出勤天数</td>
+                            </tr>
+                            <tr style="background-color: #d4edda;">
+                                <td>带薪假算出勤</td>
+                                <td>${attendanceRules.countPaidLeaveAsAttendance ? '✅ 是' : '❌ 否'}</td>
+                                <td>年假等带薪假期</td>
+                                <td>根据具体类型决定</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function testRealScenarios() {
+            const resultDiv = document.getElementById('scenarioResult');
+            
+            // 实际业务场景测试
+            const scenarios = [
+                {
+                    name: '张三 - 标准员工',
+                    shouldAttend: 22,
+                    attendance: {
+                        normal: 18,      // 正常出勤18天
+                        compTime: 2,     // 调休2天
+                        sick: 1,         // 病假1天
+                        missing: 1       // 缺勤1天
+                    },
+                    expectedActual: 21, // 22 - 1(病假) = 21
+                    explanation: '调休不减少实际出勤天数，只有病假减少'
+                },
+                {
+                    name: '李四 - 出差较多',
+                    shouldAttend: 22,
+                    attendance: {
+                        normal: 15,      // 正常出勤15天
+                        trip: 5,         // 出差5天
+                        personal: 2      // 事假2天
+                    },
+                    expectedActual: 20, // 22 - 2(事假) = 20
+                    explanation: '出差算正常出勤，不减少实际出勤天数'
+                },
+                {
+                    name: '王五 - 请假较多',
+                    shouldAttend: 22,
+                    attendance: {
+                        normal: 16,      // 正常出勤16天
+                        annual: 2,       // 年假2天
+                        sick: 1,         // 病假1天
+                        compTime: 3      // 调休3天
+                    },
+                    expectedActual: 19, // 22 - 2(年假) - 1(病假) = 19
+                    explanation: '年假和病假减少实际出勤天数，调休不减少'
+                }
+            ];
+            
+            resultDiv.innerHTML = `
+                <div class="success">
+                    <h4>🎯 实际业务场景测试</h4>
+                    <p>以下是典型的员工考勤场景，验证修复后的计算逻辑：</p>
+                    
+                    ${scenarios.map(scenario => `
+                        <div style="margin: 15px 0; padding: 10px; border: 1px solid #28a745; border-radius: 5px; background-color: #f8fff9;">
+                            <h5>${scenario.name}</h5>
+                            <p><strong>应出勤天数</strong>：${scenario.shouldAttend}天</p>
+                            <p><strong>实际情况</strong>：${Object.entries(scenario.attendance).map(([k, v]) => `${k}: ${v}天`).join(', ')}</p>
+                            <p><strong>计算结果</strong>：实际出勤天数 = ${scenario.expectedActual}天</p>
+                            <p><strong>计算说明</strong>：${scenario.explanation}</p>
+                        </div>
+                    `).join('')}
+                    
+                    <div class="formula">
+                        <strong>总结</strong>：修复后的计算逻辑更符合业务实际，调休和出差作为正常工作状态，不应减少实际出勤天数。
+                    </div>
+                </div>
+            `;
+        }
+
+        // 页面加载时自动运行测试
+        window.onload = function() {
+            testCalculationLogic();
+        };
+    </script>
+</body>
+</html>

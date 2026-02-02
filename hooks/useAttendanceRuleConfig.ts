@@ -108,7 +108,7 @@ function convertDbToFrontend(dbConfig: FullAttendanceRuleConfig, companyKey: 'ey
     attendanceDaysRules: {
       enabled: dbConfig.attend_days_enabled ?? true,
       shouldAttendanceCalcMethod: dbConfig.should_attend_calc || 'workdays',
-      fixedShouldAttendanceDays: dbConfig.fixed_should_days ?? undefined,
+      fixedShouldAttendanceDays: dbConfig.fixed_should_days ?? 22,
       includeHolidaysInShould: dbConfig.include_holidays_in_should ?? true,
       actualAttendanceRules: {
         countLateAsAttendance: dbConfig.count_late_as_attend ?? true,
