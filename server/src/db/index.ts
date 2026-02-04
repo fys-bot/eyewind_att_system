@@ -11,9 +11,6 @@ const db = knex({
     database: process.env.DB_NAME || 'attendance_rules',
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || '',
-    connectionTimeoutMillis: 30000,
-    idleTimeoutMillis: 30000,
-    acquireConnectionTimeout: 30000,
   },
   pool: { 
     min: 0, 

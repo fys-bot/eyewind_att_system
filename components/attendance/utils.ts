@@ -495,15 +495,12 @@ export function getDateRangeForDefaultMonth(): { fromDate: string, toDate: strin
     const [y, m] = monthStr.split('-').map(Number);
     
     // fromDate is the 1st of the month
-    const fromDate = `${monthStr}-01`;
+    const fromDate = `${monthStr}-02`;
     
-    // toDate should be the LAST day of the current month (e.g. 30th or 31st)
-    // new Date(year, monthIndex + 1, 0) gives the last day of the previous month index.
-    // 'm' is 1-based (1=Jan), so 'm' as monthIndex gives next month's 0th day relative to 0-based index.
-    // Example: monthStr="2025-12", m=12. Date(2025, 12, 0) -> Jan 0th 2026 -> Dec 31st 2025.
-    const lastDayDate = new Date(y, m, 0);
-    const lastDay = lastDayDate.getDate();
-    const toDate = `${monthStr}-${String(lastDay).padStart(2, '0')}`;
+    // 🔥 修复：toDate设置为下个月第一天，避免时区问题导致上个月数据被错误归类
+    // 例如：查询2026-01时，toDate设置为2026-02-01，避免2025-12-31被错认为2026-01-31
+    const nextMonth = new Date(y, m, 1); // 下个月第一天
+    const toDate = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`;
 
     return { fromDate, toDate, monthStr, year: y, month: m };
 }

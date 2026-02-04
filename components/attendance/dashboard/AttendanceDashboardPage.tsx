@@ -281,11 +281,11 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
     try {
       // 🔥 第二层：检查员工和打卡数据缓存
-      const fromDate = `${globalMonth}-01`;
+      const fromDate = `${globalMonth}-02`;
       const [y, m] = globalMonth.split('-').map(Number);
-      const lastDayDate = new Date(y, m, 0);
-      const lastDay = lastDayDate.getDate();
-      const toDate = `${globalMonth}-${String(lastDay).padStart(2, '0')}`;
+      // 🔥 修复：toDate设置为下个月第一天，避免时区问题导致上个月数据被错误归类
+      const nextMonth = new Date(y, m, 1); // 下个月第一天
+      const toDate = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`;
       
       const employeePunchCacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
       let employeePunchData = null;
@@ -306,14 +306,14 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         // 🔥 使用员工和打卡数据缓存
         console.log(`[AttendanceDashboardPage] ✅ 使用员工打卡数据缓存，只需获取审批详情`);
         console.log(`[AttendanceDashboardPage] 📊 缓存数据统计: ${employeePunchData.employees.length} 个员工, ${Object.keys(employeePunchData.companyCounts).length} 个公司`);
-        uniqueUsers = Array.from(new Map(employeePunchData.employees.map(u => [u.userid, u])).values());
+        uniqueUsers = Array.from(new Map((employeePunchData.employees as DingTalkUser[]).map((u: DingTalkUser) => [u.userid, u])).values());
         companyCounts = employeePunchData.companyCounts;
       } else {
         // 🔥 从API获取员工和打卡数据
         console.log(`[AttendanceDashboardPage] 📡 从API获取员工和打卡数据: ${currentCompany}, ${globalMonth}`);
         console.log(`[AttendanceDashboardPage] 🔄 缓存未命中，需要重新请求员工和打卡接口`);
         const data = await fetchCompanyData(currentCompany, fromDate, toDate, y, m);
-        uniqueUsers = Array.from(new Map(data.employees.map(u => [u.userid, u])).values());
+        uniqueUsers = Array.from(new Map(data.employees.map((u: DingTalkUser) => [u.userid, u])).values());
         companyCounts = data.companyCounts;
         console.log(`[AttendanceDashboardPage] 📊 API数据统计: ${uniqueUsers.length} 个员工, ${Object.keys(companyCounts).length} 个公司`);
       }
@@ -484,7 +484,38 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
           if (user.punchData) {
             const userMap: { [day: number]: DailyAttendanceStatus } = {};
             const recordsByDay = user.punchData.reduce((dayAcc, record) => {
-              const day = new Date(record.workDate).getDate();
+              // 🔥 严格按照全局月份过滤数据
+              const workDate = new Date(record.workDate);
+              const recordYear = workDate.getFullYear();
+              const recordMonth = workDate.getMonth() + 1; // getMonth() 返回0-11，需要+1
+              const day = workDate.getDate();
+              
+              // 🔥 关键修复：只处理属于当前查询月份的数据
+              const [globalYear, globalMonthNum] = globalMonth.split('-').map(Number);
+              
+              // 严格验证：记录的年月必须与全局年月完全匹配
+              if (recordYear !== globalYear || recordMonth !== globalMonthNum) {
+                console.log(`[FILTER] 过滤掉不属于${globalMonth}的数据:`, {
+                  userName: user.name,
+                  recordDate: `${recordYear}-${recordMonth.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
+                  globalMonth: globalMonth,
+                  reason: `记录属于${recordYear}-${recordMonth.toString().padStart(2, '0')}，不属于查询月份${globalMonth}`
+                });
+                return dayAcc; // 跳过这条记录
+              }
+              
+              // 🔥 添加调试信息，确认数据正确性
+              if (day === 31) {
+                console.log(`[DEBUG] 确认31号数据属于${globalMonth}:`, {
+                  userName: user.name,
+                  originalWorkDate: record.workDate,
+                  parsedDate: `${recordYear}-${recordMonth.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
+                  globalMonth: globalMonth,
+                  checkType: record.checkType,
+                  userCheckTime: record.userCheckTime
+                });
+              }
+              
               if (!dayAcc[day]) dayAcc[day] = [];
               dayAcc[day].push(record);
               return dayAcc;
@@ -983,15 +1014,12 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                     return '-';
                 }
                 
-                // 检查是否为周末（但不是补班日）
-                const isWeekend = targetDate.getDay() === 0 || targetDate.getDay() === 6;
-                if (isWeekend && (!holidayInfo || holidayInfo.holiday !== false)) {
-                    return '-';
-                }
-                
                 // 🔧 使用正确的数据结构获取考勤数据
                 const userAttendance = attendanceMap[user.userid]; // 使用 userid 而不是 id
                 const dayAttendance = userAttendance?.[day]; // 使用 day 数字而不是 dateKey
+                
+                // 检查是否为周末（但不是补班日）
+                const isWeekend = targetDate.getDay() === 0 || targetDate.getDay() === 6;
                 
                 if (dayAttendance && dayAttendance.records) {
                     // 检查请假记录
@@ -1017,7 +1045,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                         }
                     }
                     
-                    // 检查加班（周末或节假日有打卡记录）
+                    // 🔥 优先检查加班（周末或节假日有打卡记录）
                     if (isWeekend || (holidayInfo && holidayInfo.holiday === true)) {
                         const onDutyRecord = dayAttendance.records.find(r => r.checkType === 'OnDuty');
                         const offDutyRecord = dayAttendance.records.find(r => r.checkType === 'OffDuty');
@@ -1028,6 +1056,11 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                     
                     // 正常出勤
                     return '√';
+                }
+                
+                // 🔥 只有在没有考勤记录的情况下，周末才显示'-'
+                if (isWeekend && (!holidayInfo || holidayInfo.holiday !== false)) {
+                    return '-';
                 }
                 
                 // 工作日无考勤记录
@@ -1086,15 +1119,12 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                     return '-';
                 }
                 
-                // 检查是否为周末（但不是补班日）
-                const isWeekend = targetDate.getDay() === 0 || targetDate.getDay() === 6;
-                if (isWeekend && (!holidayInfo || holidayInfo.holiday !== false)) {
-                    return '-';
-                }
-                
                 // 🔧 使用正确的数据结构获取考勤数据
                 const userAttendance = attendanceMap[user.userid]; // 使用 userid 而不是 id
                 const dayAttendance = userAttendance?.[day]; // 使用 day 数字而不是 dateKey
+                
+                // 检查是否为周末（但不是补班日）
+                const isWeekend = targetDate.getDay() === 0 || targetDate.getDay() === 6;
                 
                 if (dayAttendance && dayAttendance.records) {
                     // 检查请假记录
@@ -1117,6 +1147,18 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                                 '婚假': '婚假'
                             };
                             return typeMapping[leaveType] || leaveType;
+                        }
+                    }
+                    
+                    // 🔥 优先检查加班（周末或节假日有打卡记录）
+                    if (isWeekend || (holidayInfo && holidayInfo.holiday === true)) {
+                        const onDutyRecord = dayAttendance.records.find(r => r.checkType === 'OnDuty');
+                        const offDutyRecord = dayAttendance.records.find(r => r.checkType === 'OffDuty');
+                        if (onDutyRecord && offDutyRecord) {
+                            const workHours = (new Date(offDutyRecord.userCheckTime).getTime() - new Date(onDutyRecord.userCheckTime).getTime()) / (1000 * 60 * 60);
+                            if (workHours > 0) {
+                                return `加班${workHours.toFixed(1)}小时`;
+                            }
                         }
                     }
                     
@@ -1181,20 +1223,13 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                         }
                     }
                     
-                    // 检查加班（周末或节假日有打卡记录）
-                    if (isWeekend || (holidayInfo && holidayInfo.holiday === true)) {
-                        const onDutyRecord = dayAttendance.records.find(r => r.checkType === 'OnDuty');
-                        const offDutyRecord = dayAttendance.records.find(r => r.checkType === 'OffDuty');
-                        if (onDutyRecord && offDutyRecord) {
-                            const workHours = (new Date(offDutyRecord.userCheckTime).getTime() - new Date(onDutyRecord.userCheckTime).getTime()) / (1000 * 60 * 60);
-                            if (workHours > 0) {
-                                return `加班${workHours.toFixed(1)}小时`;
-                            }
-                        }
-                    }
-                    
                     // 正常出勤
                     return '√';
+                }
+                
+                // 🔥 只有在没有考勤记录的情况下，周末才显示'-'
+                if (isWeekend && (!holidayInfo || holidayInfo.holiday !== false)) {
+                    return '-';
                 }
                 
                 // 工作日无考勤记录，可能是旷工
@@ -1316,40 +1351,29 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     const [y, m] = globalMonth.split('-').map(Number);
     const monthStr = `${m}月`;
     
-    // 获取所有公司名称
-    const companyNames = Object.keys(companyEmployeeStats);
-    const companyDisplayNames = companyNames.map(c => {
-      if (c === 'eyewind' || c.includes('风眼')) return '风眼';
-      if (c === 'hydodo' || c.includes('海多多')) return '海多多';
-      if (c.includes('脑力')) return '脑力';
-      if (c.includes('浅冰')) return '浅冰';
-      return c;
-    }).join('&');
-    
     // 生成艾特人员文本
     const atUsersText = selectedAtUsers.length > 0 
       ? selectedAtUsers.map(u => `@${u.name}`).join(' ') + ' '
       : '';
     
-    // 纯文本格式内容 - 新模板
+    // 保持原有文案格式，将链接嵌入到关键词中
     const content = `Hi，${atUsersText}
 
-附件已提交为${y}年${monthStr}${companyDisplayNames}考勤、社保公积金相关资料，请予以核算。
+风眼&脑力&浅冰&海多多主体${monthStr}份考勤表确认完毕，可进行核算；
 
 其中需注意如下情况：
 
-• ${companyDisplayNames}主体${monthStr}份考勤表已添加考勤信息；
-• ${monthStr}社保账单已添加；
-• 海多多主体社保、医保和公积金账单信息由美珍导出；
-• 人事变动部分请关注【钉钉-人员月度变动审批】通过后再结算；
-• ${monthStr}份加班人员都按调休折算；
+1. 风眼&脑力&浅冰 ${monthStr}社保账单已添加至知识库，可点击链接 [社保公积金账单](https://alidocs.dingtalk.com/i/nodes/G1DKw2zgV22jwNBkFRZy7MLBVB5r9YAn?utm_scene=team_space)；
+2. 海多多主体社保、医保和公积金账单信息由美珍导出；
+3. 人事变动部分请关注【钉钉-人员月度变动审批】通过后再结算
+4. ${monthStr}份加班人员都按调休折算
 
-考勤系统检阅可查阅：https://ai.studio/apps/drive/1XTwVrshmjL67QfjG0s4oXbtogfIrRunG
+考勤系统检阅可查阅：http://10.10.88.135:3000/；
 
 如有其他问题可随时沟通。`;
 
     return content;
-  }, [globalMonth, companyEmployeeStats, selectedAtUsers]);
+  }, [globalMonth, selectedAtUsers]);
 
   // 打开自定义下载弹窗
   const handleOpenCustomDownload = (companyName: string) => {
@@ -1619,9 +1643,22 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     }
   };
 
-  const handleConfirmAttendance = (targetCompanyName: string) => {
+  const handleConfirmAttendance = async (targetCompanyName: string) => {
     const targetStats = Object.values(companyEmployeeStats).flat() || [];
     if (!targetStats || targetStats.length === 0) { alert('没有数据可用于生成考勤确认单。'); return; }
+    
+    // 🔥 清除考勤确认相关的缓存，确保每次点击都重新拉取数据
+    console.log('[AttendanceDashboardPage] 清除考勤确认相关缓存，强制重新加载数据');
+    
+    // 清除考勤表单缓存
+    const cacheKey = `ATTENDANCE_SHEETS_${targetCompanyName}_${globalMonth}`;
+    await SmartCache.remove(cacheKey);
+    await SmartCache.remove('ATTENDANCE_SHEETS_RAW');
+    
+    // 清除仪表盘缓存，确保数据是最新的
+    await DashboardCache.clearDashboardData(targetCompanyName, globalMonth);
+    
+    console.log('[AttendanceDashboardPage] 缓存清除完成，准备导航到考勤确认页面');
     
     const records: EmployeeAttendanceRecord[] = targetStats.map(({ user, stats }) => {
         // 构建dailyData字段
@@ -2194,13 +2231,12 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 </div>
                 
                 {/* 编辑区域 */}
-                <div
-                  contentEditable
-                  suppressContentEditableWarning
-                  onInput={(e) => setPushContent(e.currentTarget.innerText)}
-                  className="w-full min-h-[300px] max-h-[400px] overflow-y-auto px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-b-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all whitespace-pre-wrap"
+                <textarea
+                  value={pushContent}
+                  onChange={(e) => setPushContent(e.target.value)}
+                  className="w-full min-h-[300px] max-h-[400px] resize-none px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-b-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all"
                   style={{ lineHeight: '1.6' }}
-                  dangerouslySetInnerHTML={{ __html: pushContent.replace(/\n/g, '<br>') }}
+                  placeholder="请输入推送内容..."
                 />
                 <p className="text-xs text-slate-400 dark:text-slate-500">
                   提示：编辑内容将以纯文本格式发送到钉钉群

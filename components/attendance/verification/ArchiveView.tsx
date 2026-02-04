@@ -10,6 +10,13 @@ export const ArchivableDetailView = React.forwardRef<HTMLDivElement, {
     dingTalkUser: DingTalkUser | undefined;
 }>(({ sheet, record, dingTalkUser }, ref) => {
 
+    // 🔥 检查是否有真实的考勤数据（不是默认生成的"√"）
+    const hasRealAttendanceData = (dailyData: Record<string, any>) => {
+        return Object.keys(dailyData || {}).some(key => 
+            /^\d+$/.test(key) && dailyData[key] && dailyData[key] !== '√'
+        );
+    };
+
     const formatTimestamp = (isoString: string | null): string => {
         if (!isoString) return 'N/A';
         const date = new Date(isoString);
@@ -20,7 +27,7 @@ export const ArchivableDetailView = React.forwardRef<HTMLDivElement, {
 
     const monthFormatted = sheet.month.replace('-', '年') + '月';
 
-    const dailyCols = Object.keys(record.dailyData)
+    const dailyCols = Object.keys((record.dailyData.dailyData || record.dailyData) || {})
         .filter(key => /^\d+$/.test(key))
         .sort((a, b) => parseInt(a) - parseInt(b));
 
@@ -30,17 +37,17 @@ export const ArchivableDetailView = React.forwardRef<HTMLDivElement, {
     const rightColumnDays = visibleDailyCols.slice(halfIndex);
 
     const summaryData = {
-        "正常出勤天数": record.dailyData["正常出勤天数"] || 'N/A',
-        "是否全勤": record.dailyData["是否全勤"] || 'N/A',
-        "豁免后迟到分钟数": record.dailyData["豁免后迟到分钟数"] || '0',
-        "迟到分钟数": record.dailyData["迟到分钟数"] || '0',
-        "备注": record.dailyData["备注"] || '无'
+        "正常出勤天数": (record.dailyData.dailyData || record.dailyData)["正常出勤天数"] || 'N/A',
+        "是否全勤": (record.dailyData.dailyData || record.dailyData)["是否全勤"] || 'N/A',
+        "豁免后迟到分钟数": (record.dailyData.dailyData || record.dailyData)["豁免后迟到分钟数"] || '0',
+        "迟到分钟数": (record.dailyData.dailyData || record.dailyData)["迟到分钟数"] || '0',
+        "备注": (record.dailyData.dailyData || record.dailyData)["备注"] || '无'
     };
 
     const confirmationMethod = record.confirm_typ === 'auto' ? "系统自动确认" : record.signatureBase64?.startsWith('data:image') ? "员工手动确认" : "员工点击确认";
 
     return (
-        <div ref={ref} className="font-sans" style={{ width: '800px', position: 'absolute', left: '-9999px', top: 0, backgroundColor: '#e0f2fe', color: '#333', padding: '40px' }}>
+        <div ref={ref} className="font-sans" style={{ width: '1000px', position: 'absolute', left: '-9999px', top: 0, backgroundColor: '#e0f2fe', color: '#333', padding: '40px' }}>
             <h1 className="text-4xl font-bold text-center text-slate-800">{record.employeeName}的考勤存证</h1>
             <p className="text-xl text-center text-slate-600 mt-2 mb-6">{monthFormatted}</p>
 
@@ -49,8 +56,8 @@ export const ArchivableDetailView = React.forwardRef<HTMLDivElement, {
 
                 {sheet.settings.showReminder && sheet.settings.reminderText && (
                     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3 text-yellow-800 mb-6">
-                        <div className="flex-shrink-0 mt-0.5"><InfoIcon className="w-5 h-5" /></div>
-                        <div><h4 className="font-semibold">温馨提示</h4><p className="text-sm mt-1">{sheet.settings.reminderText}</p></div>
+                        <div><InfoIcon className="w-5 h-5 mt-1" /></div>
+                        <div><h4 className="font-semibold">温馨提示</h4><p className="text-sm">{sheet.settings.reminderText}</p></div>
                     </div>
                 )}
 
@@ -68,22 +75,26 @@ export const ArchivableDetailView = React.forwardRef<HTMLDivElement, {
                 <div className="flex gap-x-8 relative z-0">
                     <div className="flex-1 space-y-2 text-lg border-r border-gray-300 dark:border-gray-600 pr-10">
                         {leftColumnDays.map(day => {
-                            const status = record.dailyData[day] || '-';
+                            const status = (record.dailyData.dailyData || record.dailyData)[day];
+                            // 🔥 如果是默认的"√"且没有真实数据，显示"-"
+                            const displayStatus = (status === '√' && !hasRealAttendanceData((record.dailyData.dailyData || record.dailyData))) ? '-' : (status || '-');
                             return (
                                 <div key={day} className="flex justify-between items-baseline border-b border-dashed border-gray-300 py-2">
                                     <span className="text-gray-600">{day}号</span>
-                                    <span className={`font-semibold ${status === '√' ? 'text-green-600' : 'text-gray-800'}`}>{status}</span>
+                                    <span className={`font-semibold ${displayStatus === '√' ? 'text-green-600' : 'text-gray-800'}`}>{displayStatus}</span>
                                 </div>
                             )
                         })}
                     </div>
                     <div className="flex-1 space-y-2 text-lg ">
                         {rightColumnDays.map(day => {
-                            const status = record.dailyData[day] || '-';
+                            const status = (record.dailyData.dailyData || record.dailyData)[day];
+                            // 🔥 如果是默认的"√"且没有真实数据，显示"-"
+                            const displayStatus = (status === '√' && !hasRealAttendanceData((record.dailyData.dailyData || record.dailyData))) ? '-' : (status || '-');
                             return (
                                 <div key={day} className="flex justify-between items-baseline border-b border-dashed border-gray-300 py-2">
                                     <span className="text-gray-600">{day}号</span>
-                                    <span className={`font-semibold ${status === '√' ? 'text-green-600' : 'text-gray-800'}`}>{status}</span>
+                                    <span className={`font-semibold ${displayStatus === '√' ? 'text-green-600' : 'text-gray-800'}`}>{displayStatus}</span>
                                 </div>
                             )
                         })}
@@ -92,12 +103,28 @@ export const ArchivableDetailView = React.forwardRef<HTMLDivElement, {
 
                 <div className="mt-8 pt-6 border-t-2 border-gray-200">
                     <div className="grid grid-cols-2 gap-x-8 text-lg">
-                        {Object.entries(summaryData).map(([key, value]) => (
-                            <div key={key} className="flex justify-between py-1">
-                                <span className="text-gray-600 min-w-[80px]">{key}</span>
-                                <span className="font-semibold text-gray-800">{String(value)}</span>
-                            </div>
-                        ))}
+                        {Object.entries(summaryData).map(([key, value]) => {
+                            // 🔥 备注字段需要特殊处理，支持换行显示
+                            if (key === '备注') {
+                                return (
+                                    <div key={key} className="col-span-2 py-2 border-t border-gray-200 mt-2">
+                                        <div className="flex flex-col gap-2">
+                                            <span className="text-gray-600 font-medium">{key}:</span>
+                                            <div className="font-semibold text-gray-800 whitespace-pre-wrap leading-relaxed text-base bg-gray-50 p-3 rounded border">
+                                                {String(value)}
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            }
+                            
+                            return (
+                                <div key={key} className="flex justify-between py-1">
+                                    <span className="text-gray-600 min-w-[80px]">{key}</span>
+                                    <span className="font-semibold text-gray-800">{String(value)}</span>
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
 

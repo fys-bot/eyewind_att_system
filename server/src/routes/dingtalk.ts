@@ -272,6 +272,8 @@ const fetchAllEmployees = async (req: express.Request, res: express.Response) =>
       _fetchDepartmentMap(dingToken),
     ]);
 
+    console.log({allUserIds, departmentMap})
+
     // 3. 异步获取 HRM 主体公司数据 (依赖 allUserIds)
     const hrmCompanyMap = await _fetchHrmEmployeeData(dingToken, allUserIds);
 
@@ -484,6 +486,9 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
 
         console.log(`[${new Date().toLocaleString()}] Attendance 开始获取用户 ${employees.length} 人在 ${fromDate} 到 ${toDate} 间的打卡详情...`);
 
+        // 🔥 添加详细的日期解析调试信息
+        // console.log(`[DEBUG] 原始日期参数:`, { fromDate, toDate });
+        
         const allRecords: any[] = [];
         const USER_CHUNK_LIMIT = 50;
 
@@ -491,6 +496,14 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
         const startDayString = fromDate.split(' ')[0];
         const endDayString = toDate.split(' ')[0];
         const overallEnd = new Date(endDayString.replace(/-/g, '/'));
+        
+        // 🔥 添加日期解析调试信息
+        // console.log(`[DEBUG] 日期解析结果:`, {
+        //     startDayString,
+        //     endDayString,
+        //     overallEndISO: overallEnd.toISOString(),
+        //     overallEndLocal: overallEnd.toLocaleString()
+        // });
 
         // 1. 【新增步骤】：获取当前用户列表的员工姓名和部门信息映射
         const employeeDetailsMap = new Map<string, {name: string, department: string}>();
@@ -506,7 +519,13 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
 
             // 3. 【日期分段循环】: 每次处理最多 7 天 (每次用户块循环都需要从原始的起始日期开始)
             const dateChunkStart = new Date(startDayString.replace(/-/g, '/'));
-            while (dateChunkStart <= overallEnd) {
+            let iterations = 0;
+            const MAX_ITERATIONS = 100; // 🔥 添加安全限制，防止死循环
+            
+            while (dateChunkStart <= overallEnd && iterations < MAX_ITERATIONS) {
+                iterations++;
+                console.log(`[${new Date().toLocaleString()}] Attendance - 日期循环第${iterations}次: ${dateChunkStart.toISOString().split('T')[0]} <= ${overallEnd.toISOString().split('T')[0]}`);
+                
                 // 1. 计算当前分段的结束日期
                 let currentEnd = new Date(dateChunkStart);
                 currentEnd.setDate(currentEnd.getDate() + 6); // + 6 days = 7 天范围 (包含起始日)
@@ -536,6 +555,15 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
                         limit: limit,
                     };
 
+                    // 🔥 添加钉钉API调用调试信息
+                    // console.log(`[DEBUG] 钉钉API调用参数:`, {
+                    //     workDateFrom: chunkWorkDateFrom,
+                    //     workDateTo: chunkWorkDateTo,
+                    //     userCount: currentUserChunk.length,
+                    //     offset,
+                    //     limit
+                    // });
+
                     const dingtalkResponse = await _callDingTalkApi(
                         dingToken,
                         '/attendance/list',
@@ -543,6 +571,16 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
                     );
 
                     if (dingtalkResponse.recordresult && dingtalkResponse.recordresult.length > 0) {
+                        // 🔥 添加返回数据的调试信息
+                        const sampleRecord = dingtalkResponse.recordresult[0];
+                        // console.log(`[DEBUG] 钉钉API返回数据样例:`, {
+                        //     recordCount: dingtalkResponse.recordresult.length,
+                        //     sampleWorkDate: sampleRecord?.workDate,
+                        //     sampleWorkDateParsed: sampleRecord?.workDate ? new Date(sampleRecord.workDate).toISOString() : 'N/A',
+                        //     sampleUserId: sampleRecord?.userId,
+                        //     sampleCheckType: sampleRecord?.checkType
+                        // });
+                        
                         allRecords.push(...dingtalkResponse.recordresult);
                     }
 
@@ -557,12 +595,47 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
 
                 // --- 分段内的分页获取逻辑结束 ---
 
-                // 5. 移动到下一个分段的起始日期 (当前结束日期的后一天)
-                dateChunkStart.setDate(currentEnd.getDate() + 1);
+                // 5. 🔥 修复日期递增逻辑，避免死循环
+                const nextStart = new Date(currentEnd);
+                nextStart.setDate(nextStart.getDate() + 1);
+                
+                // 检查是否需要继续循环
+                if (nextStart > overallEnd) {
+                    console.log(`[${new Date().toLocaleString()}] Attendance - 日期循环结束: 下次开始日期 ${nextStart.toISOString().split('T')[0]} 超过结束日期`);
+                    break;
+                }
+                
+                // 更新循环变量
+                dateChunkStart.setTime(nextStart.getTime());
+            }
+            
+            // 🔥 检查是否因为达到最大迭代次数而退出
+            if (iterations >= MAX_ITERATIONS) {
+                console.error(`[${new Date().toLocaleString()}] Attendance - 警告：日期循环达到最大迭代次数 ${MAX_ITERATIONS}，可能存在死循环问题`);
             }
         }
 
         console.log(`[${new Date().toLocaleString()}] Attendance 打卡详情获取完成，共 ${allRecords.length} 条记录。`);
+
+        // 🔥 添加31号数据的特别检查
+        const day31Records = allRecords.filter(record => {
+            const workDate = new Date(record.workDate);
+            return workDate.getDate() === 31;
+        });
+        
+        // if (day31Records.length > 0) {
+        //     console.log(`[DEBUG] 发现 ${day31Records.length} 条31号数据:`, 
+        //         day31Records.slice(0, 3).map(record => ({
+        //             userId: record.userId,
+        //             originalWorkDate: record.workDate,
+        //             parsedWorkDate: new Date(record.workDate).toISOString(),
+        //             year: new Date(record.workDate).getFullYear(),
+        //             month: new Date(record.workDate).getMonth() + 1,
+        //             day: new Date(record.workDate).getDate(),
+        //             checkType: record.checkType
+        //         }))
+        //     );
+        // }
 
         // 6. 【修改处理步骤】：对所有记录进行映射、时间转换和员工信息增强
         const processedRecords = allRecords.map((record) =>

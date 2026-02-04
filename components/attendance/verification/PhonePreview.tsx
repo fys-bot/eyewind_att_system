@@ -15,7 +15,7 @@ export const AttendancePhonePreview = React.forwardRef<HTMLDivElement, {
     lateExemptionEnabled?: boolean;
     fullAttendanceEnabled?: boolean;
 }>(({ sheet, record, onConfirmSignature, signatureBase64, dingTalkUsers, isDingTalkDataLoading, lateExemptionEnabled = true, fullAttendanceEnabled = true }, ref) => {
-
+    console.log('==> ============> sheet', sheet, record)
     const [modal, setModal] = useState<'none' | 'feedback' | 'signature'>('none');
     const [isDailyDetailsOpen, setIsDailyDetailsOpen] = useState(false);
     const [isSummaryOpen, setIsSummaryOpen] = useState(true);
@@ -25,7 +25,25 @@ export const AttendancePhonePreview = React.forwardRef<HTMLDivElement, {
     const getPreviewValue = (rec: EmployeeAttendanceRecord, column: string) => {
         if (column === '序号') return rec.employeeId;
         if (column === '姓名') return rec.employeeName;
-        return rec.dailyData[column] || '-';
+        
+        // 🔥 优先使用真实的考勤数据，避免显示默认的"√"
+        const value = rec.dailyData.dailyData[column];
+        
+        // 🔥 如果是日期列且没有数据，显示"-"而不是默认的"√"
+        if (/^\d+$/.test(column) && (!value || value === '√')) {
+            // 检查是否有真实的考勤数据
+            const hasRealData = Object.keys(rec.dailyData.dailyData).some(key => 
+                /^\d+$/.test(key) && rec.dailyData.dailyData[key] && rec.dailyData.dailyData[key] !== '√'
+            );
+            
+            // 如果有真实数据但当前日期没有，显示"-"
+            // 如果完全没有真实数据，也显示"-"
+            if (!value || (value === '√' && hasRealData)) {
+                return '-';
+            }
+        }
+        
+        return value || '-';
     };
 
     // 根据规则开关过滤汇总字段

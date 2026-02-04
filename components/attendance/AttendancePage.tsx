@@ -10,6 +10,45 @@ import { AttendanceDetailView } from './verification/DetailView.tsx';
 import { AttendanceEmptyState } from './EmptyState.tsx';
 import { SmartCache } from './utils.ts';
 
+// 🔥 计算记录完整性得分的辅助函数
+function calculateRecordCompleteness(record: any): number {
+    let score = 0;
+    
+    // 基础字段得分
+    if (record.userid) score += 1;
+    if (record.username || record.user_name || record.name) score += 1;
+    if (record.department || record.dept) score += 1;
+    
+    // 状态字段得分
+    if (record.is_send !== undefined) score += 1;
+    if (record.is_view !== undefined) score += 1;
+    if (record.is_confirm !== undefined) score += 1;
+    
+    // 时间字段得分
+    if (record.sent_at || record.sendAt) score += 1;
+    if (record.confirmed_at || record.confirmedAt) score += 1;
+    if (record.viewed_at || record.viewedAt) score += 1;
+    
+    // 签名字段得分
+    if (record.signatureBase64 || record.signature_base64 || record.signature) score += 2;
+    
+    // dailyData 完整性得分
+    const dailyData = record.dailyData || record.daily_data || record.records || record.attendance_data || {};
+    if (typeof dailyData === 'object' && dailyData !== null) {
+        const keys = Object.keys(dailyData);
+        if (keys.length > 0) score += 1;
+        if (keys.length > 10) score += 1; // 有较多字段
+        if (keys.some(key => /^\d+$/.test(key))) score += 1; // 有日期字段
+        if (dailyData['正常出勤天数']) score += 1; // 有汇总字段
+    }
+    
+    // 任务ID得分
+    if (record.corp_task_id || record.corpTaskId) score += 1;
+    if (record.todo_task_id || record.todoTaskId) score += 1;
+    
+    return score;
+}
+
 // --- Main Page Component ---
 // 🔥 修复说明：
 // 1. 添加了 hasInitialized 和 isCurrentlyLoading 状态来防止重复API调用
@@ -25,9 +64,10 @@ export interface AttendancePageProps {
     userPermissions?: string[]; // New Prop
     currentUserInfo?: User; // New Prop for Audit Log
     globalMonth?: string; // 🔥 全局月份过滤
+    forceRefresh?: boolean; // 🔥 新增：强制刷新标志
 }
 
-export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, onBack, currentCompany, onLoadingChange, userPermissions = [], currentUserInfo, globalMonth }) => {
+export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, onBack, currentCompany, onLoadingChange, userPermissions = [], currentUserInfo, globalMonth, forceRefresh = false }) => {
     // 🔥 简化状态管理 - 移除复杂的加载状态逻辑
     const [view, setView] = useState<'dashboard' | 'create' | 'detail'>(preloadedData ? 'create' : 'dashboard');
     const [sheets, setSheets] = useState<AttendanceSheet[]>([]);
@@ -53,31 +93,46 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
     }, [isLoading, isDingTalkDataLoading, isRefreshing, onLoadingChange]);
 
     // 🔥 优化的数据加载函数 - 利用缓存避免重复调用
-    const loadData = useCallback(async () => {
-        console.log('[AttendancePage] 开始加载数据');
+    const loadData = useCallback(async (forceRefreshData = false) => {
+        console.log('[AttendancePage] 开始加载数据, forceRefresh:', forceRefreshData || forceRefresh);
         setIsLoading(true);
         setSheetsError(null);
 
         try {
-            // 🔥 添加缓存逻辑
+            // 🔥 如果是强制刷新，清除相关缓存
+            if (forceRefreshData || forceRefresh) {
+                console.log('[AttendancePage] 强制刷新，清除所有相关缓存');
+                const cacheKey = `ATTENDANCE_SHEETS_${currentCompany}_${globalMonth || 'current'}`;
+                await SmartCache.remove(cacheKey);
+                await SmartCache.remove('ATTENDANCE_SHEETS_RAW');
+                
+                // 清除员工数据缓存
+                const employeeCacheKey = `employees_${currentCompany}`;
+                const employeeCache = (window as any).employeeCache || new Map();
+                employeeCache.delete(employeeCacheKey);
+            }
+            
+            // 🔥 添加缓存逻辑（只有在非强制刷新时才使用缓存）
             const cacheKey = `ATTENDANCE_SHEETS_${currentCompany}_${globalMonth || 'current'}`;
             console.log('[AttendancePage] 检查缓存:', cacheKey);
             
-            // 先尝试从缓存获取数据
-            const cachedSheets = await SmartCache.get<AttendanceSheet[]>(cacheKey);
-            if (cachedSheets && cachedSheets.length > 0) {
-                console.log('[AttendancePage] 使用缓存数据，数量:', cachedSheets.length);
-                setSheets(cachedSheets);
-                setSheetsError(null);
-                
-                // 有缓存数据时直接跳转到详情页面
-                const targetSheet = cachedSheets.find(s => s.month === globalMonth) || cachedSheets[0];
-                setSelectedSheetId(targetSheet.id);
-                setView('detail');
-                return;
+            // 先尝试从缓存获取数据（只有在非强制刷新时）
+            if (!forceRefreshData && !forceRefresh) {
+                const cachedSheets = await SmartCache.get<AttendanceSheet[]>(cacheKey);
+                if (cachedSheets && cachedSheets.length > 0) {
+                    console.log('[AttendancePage] 使用缓存数据，数量:', cachedSheets.length);
+                    setSheets(cachedSheets);
+                    setSheetsError(null);
+                    
+                    // 有缓存数据时直接跳转到详情页面
+                    const targetSheet = cachedSheets.find(s => s.month === globalMonth) || cachedSheets[0];
+                    setSelectedSheetId(targetSheet.id);
+                    setView('detail');
+                    return;
+                }
             }
 
-            console.log('[AttendancePage] 缓存未命中，从API加载数据');
+            console.log('[AttendancePage] 缓存未命中或强制刷新，从API加载数据');
 
             // 1. 检查员工数据缓存，如果有缓存就跳过员工数据加载
             const employeeCacheKey = `employees_${currentCompany}`;
@@ -189,8 +244,40 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             const sheets: AttendanceSheet[] = Object.entries(monthlyGroups).map(([month, monthRecords]: [string, any[]]) => {
                 console.log(`[AttendancePage] 处理月份 ${month}, 记录数量: ${monthRecords.length}`);
                 
+                // 🔥 添加去重逻辑：按员工姓名去重，优先保留数据更完整的记录
+                const uniqueRecords = monthRecords.reduce((acc: any[], record: any) => {
+                    const employeeName = record.username || record.user_name || record.name || record.real_name || record.display_name || '';
+                    
+                    // 查找是否已存在同名员工
+                    const existingIndex = acc.findIndex(existing => {
+                        const existingName = existing.username || existing.user_name || existing.name || existing.real_name || existing.display_name || '';
+                        return existingName === employeeName;
+                    });
+                    
+                    if (existingIndex === -1) {
+                        // 不存在，直接添加
+                        acc.push(record);
+                    } else {
+                        // 已存在，比较数据完整性，保留更完整的记录
+                        const existing = acc[existingIndex];
+                        const currentScore = calculateRecordCompleteness(record);
+                        const existingScore = calculateRecordCompleteness(existing);
+                        
+                        if (currentScore > existingScore) {
+                            console.log(`[AttendancePage] 发现重复员工 ${employeeName}，替换为更完整的记录 (${currentScore} > ${existingScore})`);
+                            acc[existingIndex] = record;
+                        } else {
+                            console.log(`[AttendancePage] 发现重复员工 ${employeeName}，保留现有记录 (${existingScore} >= ${currentScore})`);
+                        }
+                    }
+                    
+                    return acc;
+                }, []);
+                
+                console.log(`[AttendancePage] 去重前记录数量: ${monthRecords.length}, 去重后: ${uniqueRecords.length}`);
+                
                 // 转换为EmployeeAttendanceRecord格式
-                const employeeRecords: EmployeeAttendanceRecord[] = monthRecords.map((record: any) => {
+                const employeeRecords: EmployeeAttendanceRecord[] = uniqueRecords.map((record: any) => {
                     // 🔥 添加调试信息，显示原始记录的字段
                     if (monthRecords.indexOf(record) === 0) {
                         console.log(`[AttendancePage] 第一条记录的字段:`, {
@@ -259,6 +346,46 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                         });
                     }
                     
+                    // 🔥 获取真实的 dailyData，优先使用接口返回的数据
+                    let dailyData = record.dailyData || record.daily_data || record.records || record.attendance_data || {};
+                    
+                    // 🔥 只为缺少的汇总统计字段生成默认值，不覆盖已有数据
+                    const requiredSummaryFields = [
+                        '正常出勤天数', '是否全勤', '迟到次数', '迟到分钟数', '豁免后迟到分钟数',
+                        '缺卡次数', '旷工天数', '早退分钟数', '备注'
+                    ];
+                    
+                    // 🔥 只为缺少的汇总字段添加默认值，不影响日期列数据
+                    for (const field of requiredSummaryFields) {
+                        if (!(field in dailyData)) {
+                            switch (field) {
+                                case '正常出勤天数':
+                                case '迟到次数':
+                                case '迟到分钟数':
+                                case '豁免后迟到分钟数':
+                                case '缺卡次数':
+                                case '旷工天数':
+                                case '早退分钟数':
+                                    dailyData[field] = '0';
+                                    break;
+                                case '是否全勤':
+                                    dailyData[field] = '否';
+                                    break;
+                                case '备注':
+                                    dailyData[field] = '无';
+                                    break;
+                            }
+                        }
+                    }
+                    
+                    // 🔥 记录真实数据的使用情况
+                    const hasRealDailyData = Object.keys(dailyData).some(key => /^\d+$/.test(key));
+                    if (hasRealDailyData) {
+                        console.log(`[AttendancePage] 员工 ${record.username} 使用真实考勤数据，日期字段数量: ${Object.keys(dailyData).filter(key => /^\d+$/.test(key)).length}`);
+                    } else {
+                        console.log(`[AttendancePage] 员工 ${record.username} 缺少日期考勤数据`);
+                    }
+                    
                     return {
                         id: record.id || `${record.userid}_${month}`,
                         employeeId: record.userid || record.user_id || '',
@@ -273,7 +400,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                         mainCompany: record.mainCompany || record.main_company || record.company || currentCompany,
                         signatureBase64: record.signatureBase64 || record.signature_base64 || record.signature || null,
                         isSigned: !!(record.signatureBase64 || record.signature_base64 || record.signature),
-                        dailyData: record.dailyData || record.daily_data || record.records || record.attendance_data || {},
+                        dailyData: dailyData, // 🔥 使用处理后的 dailyData
                         corp_task_id: record.corp_task_id || record.corpTaskId || null,
                         todo_task_id: record.todo_task_id || record.todoTaskId || null,
                     } as EmployeeAttendanceRecord;
@@ -281,6 +408,54 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 
                 console.log(`[AttendancePage] 月份 ${month} 转换后employeeRecords数量: ${employeeRecords.length}`);
                 
+                // 🔥 生成完整的显示列配置，包括日期列和汇总字段
+                const [yearStr, monthStr] = month.split('-');
+                const year = parseInt(yearStr);
+                const monthNum = parseInt(monthStr) - 1; // JavaScript月份从0开始
+                const daysInMonth = new Date(year, monthNum + 1, 0).getDate();
+                
+                // 🔥 计算工作日数量（排除周末，但不考虑节假日，因为节假日数据可能不可用）
+                let workDays = 0;
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const date = new Date(year, monthNum, day);
+                    const dayOfWeek = date.getDay();
+                    // 排除周六(6)和周日(0)
+                    if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+                        workDays++;
+                    }
+                }
+                
+                // 生成日期列（1-31号）
+                const dateColumns = Array.from({ length: daysInMonth }, (_, i) => String(i + 1));
+                
+                // 汇总字段列
+                const summaryColumns = [
+                    '正常出勤天数', '是否全勤', '迟到次数', '迟到分钟数', '豁免后迟到分钟数',
+                    '缺卡次数', '旷工天数', '早退分钟数',
+                    '年假天数', '病假天数', '事假天数', '调休天数', '出差天数',
+                    '丧假天数', '陪产假天数', '产假天数', '育儿假天数', '婚假天数',
+                    '年假(时)', '病假(时)', '事假(时)', '调休(时)', '出差(时)',
+                    '丧假(时)', '陪产假(时)', '产假(时)', '育儿假(时)', '婚假(时)',
+                    '加班总时长(分)', '19:30加班次数', '19:30加班时长(分)',
+                    '20:30加班次数', '20:30加班时长(分)', '22:00加班次数', '22:00加班时长(分)',
+                    '24:00加班次数', '24:00加班时长(分)', '备注'
+                ];
+                
+                // 合并所有显示列
+                const allShowColumns = [...dateColumns, ...summaryColumns];
+                
+                console.log(`[AttendancePage] 生成显示列配置: ${daysInMonth}个日期列 + ${summaryColumns.length}个汇总列 = ${allShowColumns.length}列`);
+                console.log(`[AttendancePage] ${monthStr}月工作日统计: 总天数${daysInMonth}天，工作日${workDays}天`);
+                
+                // 🔥 生成自动确认时间：当天18:30
+                const getTodayAt1830 = () => {
+                    const today = new Date();
+                    const year = today.getFullYear();
+                    const month = String(today.getMonth() + 1).padStart(2, '0');
+                    const day = String(today.getDate()).padStart(2, '0');
+                    return `${year}-${month}-${day}T18:30`;
+                };
+
                 // 创建AttendanceSheet对象
                 const sheet: AttendanceSheet = {
                     id: `sheet_${month}`,
@@ -288,17 +463,17 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                     month: month,
                     status: 'draft',
                     settings: {
-                        reminderText: '',
-                        showReminder: false,
-                        showColumns: [],
+                        reminderText: `${monthStr}月为${workDays}个工作日，请仔细核对考勤数据，并及时签名确认！`, // 🔥 设置默认温馨提示，使用准确的工作日数量
+                        showReminder: true, // 🔥 启用温馨提示显示
+                        showColumns: allShowColumns, // 🔥 设置完整的显示列配置
                         hideEmptyColumnsOption: 'none',
-                        autoConfirmEnabled: false,
-                        autoConfirmDate: '',
-                        feedbackEnabled: false,
-                        feedbackContactPerson: '',
+                        autoConfirmEnabled: true, // 🔥 启用自动确认功能
+                        autoConfirmDate: getTodayAt1830(), // 🔥 设置自动确认时间为当天18:30
+                        feedbackEnabled: true, // 🔥 启用反馈功能
+                        feedbackContactPerson: '人事部门', // 🔥 设置默认联系人
                         notificationMethod: '',
                         readAndBurn: false,
-                        employeeSignature: false,
+                        employeeSignature: true, // 🔥 启用员工签名功能
                     },
                     employeeRecords: employeeRecords,
                     createdAt: new Date().toISOString(),
@@ -343,7 +518,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             setIsLoading(false);
             setIsDingTalkDataLoading(false);
         }
-    }, [currentCompany, preloadedData, globalMonth]); // 🔥 添加 globalMonth 依赖
+    }, [currentCompany, preloadedData, globalMonth, forceRefresh]); // 🔥 添加 forceRefresh 依赖
     
     useEffect(() => {
         console.log('[AttendancePage] useEffect执行，hasInitialized:', hasInitializedRef.current, 'globalMonth:', globalMonth);
@@ -382,6 +557,41 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
         // 更新上一次的globalMonth值
         prevGlobalMonthRef.current = globalMonth;
     }, [globalMonth]); // 🔥 移除loadData依赖，避免无限循环
+
+    // 🔥 新增：当currentCompany变化时重新加载数据
+    const prevCurrentCompanyRef = useRef<string>(currentCompany);
+    useEffect(() => {
+        console.log('[AttendancePage] currentCompany useEffect执行:', {
+            hasInitialized: hasInitializedRef.current,
+            currentCompany,
+            prevCurrentCompany: prevCurrentCompanyRef.current
+        });
+        
+        // 🔥 只有在已经初始化过且currentCompany确实变化时才重新加载
+        const hasCurrentCompanyChanged = prevCurrentCompanyRef.current !== currentCompany;
+        
+        if (hasInitializedRef.current && currentCompany && hasCurrentCompanyChanged) {
+            console.log('[AttendancePage] currentCompany变化，重新加载数据:', prevCurrentCompanyRef.current, '->', currentCompany);
+            // 🔥 重置初始化状态，允许重新加载
+            hasInitializedRef.current = false;
+            // 🔥 清除所有相关缓存
+            SmartCache.remove(`ATTENDANCE_SHEETS_RAW`);
+            SmartCache.remove(`ATTENDANCE_SHEETS_${prevCurrentCompanyRef.current}_${globalMonth || 'current'}`);
+            SmartCache.remove(`ATTENDANCE_SHEETS_${currentCompany}_${globalMonth || 'current'}`);
+            
+            // 清除员工数据缓存
+            const employeeCache = (window as any).employeeCache || new Map();
+            employeeCache.delete(`employees_${prevCurrentCompanyRef.current}`);
+            employeeCache.delete(`employees_${currentCompany}`);
+            
+            loadData().catch(error => {
+                console.error('[AttendancePage] currentCompany变化时loadData执行失败:', error);
+            });
+        }
+        
+        // 更新上一次的currentCompany值
+        prevCurrentCompanyRef.current = currentCompany;
+    }, [currentCompany]); // 🔥 监听currentCompany变化
 
     const handleRefreshSheetDetail = async (month: string) => {
         setIsRefreshing(true);
@@ -547,7 +757,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             default:
                 // 🔥 优化错误信息显示，添加创建考勤确认入口
                 if (!isLoading && sheetsError) {
-                    const isConfigurationError = sheetsError.includes('还未配置考勤确认信息');
+                    const isConfigurationError = sheetsError.includes('还未配置考勤确认信息') || sheetsError.includes('没有找到');
                     
                     return (
                         <div className="flex flex-col justify-center items-center h-64 space-y-4">

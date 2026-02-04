@@ -379,12 +379,32 @@ export const useAttendanceStats = (
                 // Fix: Iterate using entries to get the day even if records are missing, though usually attendanceMap has entries
                 Object.values(userAttendance).forEach((daily: DailyAttendanceStatus) => {
                     const workDate = new Date(daily.records[0]?.workDate || 0);
+                    
                     // Fallback if records are empty is tricky, assuming data integrity or we rely on what's present
                     if (daily.records.length === 0) return;
 
                     const day = workDate.getDate();
                     const year = workDate.getFullYear();
                     const month = workDate.getMonth();
+                    
+                    // 🔥 严格验证：只处理属于当前查询月份的数据
+                    if (year !== currentYear || month !== currentMonth) {
+                        console.log(`[FILTER] useAttendanceStats 过滤掉不属于${currentYear}-${(currentMonth + 1).toString().padStart(2, '0')}的数据:`, {
+                            recordDate: `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
+                            currentMonth: `${currentYear}-${(currentMonth + 1).toString().padStart(2, '0')}`,
+                            reason: `记录属于${year}-${(month + 1).toString().padStart(2, '0')}，不属于查询月份`
+                        });
+                        return; // 跳过这条记录
+                    }
+                    
+                    // 🔥 添加调试信息，确认31号数据的正确性
+                    if (day === 31) {
+                        console.log(`[DEBUG] useAttendanceStats 确认31号数据属于${currentYear}-${(currentMonth + 1).toString().padStart(2, '0')}:`, {
+                            originalWorkDate: daily.records[0]?.workDate,
+                            parsedDate: `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
+                            recordsCount: daily.records.length
+                        });
+                    }
 
                     const isToday = year === currentYear && month === currentMonth && day === currentDay;
 

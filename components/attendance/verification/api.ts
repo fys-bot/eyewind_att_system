@@ -299,7 +299,7 @@ export async function sendDingTalkNotifications(records: EmployeeAttendanceRecor
         // --- 1. Corp Message (Action Card) ---
         let form = [
             { key: "正常出勤天数：", value: String(record.dailyData["正常出勤天数"]) },
-            { key: "是否全勤：", value: record.dailyData["是否全勤"] ? "是" : "否" },
+            { key: "是否全勤：", value: record.dailyData["是否全勤"] },
             { key: "迟到累计：", value: `${record.dailyData["迟到分钟数"]} 分钟` },
             { key: "豁免后迟到：", value: `${record.dailyData["豁免后迟到分钟数"]} 分钟` },
             { key: "备注：", value: record.dailyData["备注"] || "-" }

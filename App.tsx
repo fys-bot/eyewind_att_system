@@ -181,6 +181,25 @@ const App: React.FC = () => {
     // Global Company State (Persisted)
     const [currentCompany, setCurrentCompany] = useLocalStorage<string>('currentCompany', 'eyewind');
 
+    // 🔥 处理公司主体变更
+    const handleCompanyChange = async (newCompany: string) => {
+        console.log('[App] 公司主体变更:', newCompany);
+        setCurrentCompany(newCompany);
+        
+        // 如果当前在考勤确认页面，清除缓存并重置页面
+        if (page === 'attendanceManagement') {
+            console.log('[App] 公司变更时清除考勤确认相关缓存');
+            // 清除考勤表单缓存
+            const cacheKey = `ATTENDANCE_SHEETS_${newCompany}_${globalMonth}`;
+            await SmartCache.remove(cacheKey);
+            await SmartCache.remove('ATTENDANCE_SHEETS_RAW');
+            
+            // 重置预加载数据以触发重新加载
+            setAttendancePreloadData(null);
+            setAttendanceManagementKey(prev => prev + 1);
+        }
+    };
+
     // 🔥 Global Month State (Persisted) - 全局月份状态
     const [globalMonth, setGlobalMonth] = useLocalStorage<string>('globalMonth', getDefaultMonth());
 
@@ -259,7 +278,17 @@ const App: React.FC = () => {
         if (isMobile) setIsMobileNavOpen(false);
     };
 
-    const handleNavigateToConfirmation = (data: EmployeeAttendanceRecord[], month: string, mainCompany: string) => {
+    const handleNavigateToConfirmation = async (data: EmployeeAttendanceRecord[], month: string, mainCompany: string) => {
+        // 🔥 清除考勤确认页面相关的缓存，确保每次都重新拉取数据
+        console.log('[App] 清除考勤确认相关缓存，强制重新加载数据');
+        
+        // 清除考勤表单缓存
+        const cacheKey = `ATTENDANCE_SHEETS_${mainCompany}_${month}`;
+        await SmartCache.remove(cacheKey);
+        await SmartCache.remove('ATTENDANCE_SHEETS_RAW');
+        
+        console.log('[App] 缓存清除完成，设置预加载数据并导航到考勤确认页面');
+        
         setAttendancePreloadData({ data, month, mainCompany });
         setAttendanceManagementKey(prev => prev + 1);
         setPage('attendanceManagement');
@@ -293,6 +322,7 @@ const App: React.FC = () => {
                     userPermissions={user.permissions} // Pass permissions
                     currentUserInfo={user} // Pass user info for audit logging
                     globalMonth={globalMonth} // 🔥 传递全局月份
+                    forceRefresh={true} // 🔥 每次导航到考勤确认都强制刷新
                 /> : <div>无权限访问</div>;
             case 'attendanceAdmin':
                 return user.permissions?.includes('attendance_dashboard:view') ? <AttendanceDashboardPage
@@ -323,7 +353,7 @@ const App: React.FC = () => {
                     onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
                     isMobile={isMobile}
                     currentCompany={currentCompany}
-                    onCompanyChange={setCurrentCompany}
+                    onCompanyChange={handleCompanyChange}
                     isDisabled={isGlobalLoading}
                     globalMonth={globalMonth}
                     onGlobalMonthChange={handleGlobalMonthChange}
@@ -347,7 +377,7 @@ const App: React.FC = () => {
                             onToggle={() => setIsMobileNavOpen(false)}
                             isMobile={isMobile}
                             currentCompany={currentCompany}
-                            onCompanyChange={setCurrentCompany}
+                            onCompanyChange={handleCompanyChange}
                             isDisabled={isGlobalLoading}
                             globalMonth={globalMonth}
                             onGlobalMonthChange={handleGlobalMonthChange}
