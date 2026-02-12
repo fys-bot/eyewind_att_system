@@ -140,15 +140,51 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
             },
             crossDayCheckout: {
                 enabled: true,
+                enableLookback: true, // 启用向前查询
+                lookbackDays: 3, // 最多向前查询3天
                 rules: [
+                    // 跨天规则（前一天影响第二天）
                     {
                         checkoutTime: "20:30",
-                        nextDayCheckinTime: "09:30", 
-                        description: "晚上8点半打卡，第二天可以早上9点半打卡"
+                        nextCheckinTime: "09:30", 
+                        description: "晚上8点半后打卡，第二天可9点半上班",
+                        applyTo: 'day'
+                    },
+                    {
+                        checkoutTime: "24:00",
+                        nextCheckinTime: "13:30",
+                        description: "晚上12点后打卡，第二天可下午1点半上班",
+                        applyTo: 'day'
+                    },
+                    // 跨周规则（周五/周末影响周一）
+                    {
+                        checkoutTime: "20:30",
+                        nextCheckinTime: "09:30",
+                        description: "周五晚上8点半后打卡，周一可9点半上班",
+                        applyTo: 'week',
+                        weekDays: ['friday']
+                    },
+                    {
+                        checkoutTime: "24:00",
+                        nextCheckinTime: "13:30",
+                        description: "周五晚上12点后打卡，周一可下午1点半上班",
+                        applyTo: 'week',
+                        weekDays: ['friday']
+                    },
+                    // 跨月规则（上月最后一天影响本月第一天）
+                    {
+                        checkoutTime: "00:00",
+                        nextCheckinTime: "09:30",
+                        description: "本月第一天默认9点半上班",
+                        applyTo: 'month'
+                    },
+                    {
+                        checkoutTime: "24:00",
+                        nextCheckinTime: "13:30",
+                        description: "上月最后一天晚上12点后打卡，本月第一天可下午1点半上班",
+                        applyTo: 'month'
                     }
-                ],
-                maxCheckoutTime: "24:00",
-                nextDayCheckinTime: "13:30"
+                ]
             }
         }
     },
@@ -214,9 +250,9 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
             },
             crossDayCheckout: {
                 enabled: false, // 禁用跨天打卡
-                rules: [], // 空数组，不设置跨天规则
-                maxCheckoutTime: "24:00",
-                nextDayCheckinTime: "13:30"
+                enableLookback: false,
+                lookbackDays: 3,
+                rules: [] // 空数组，不设置跨天规则
             }
         }
     }
@@ -224,153 +260,20 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
 
 /**
  * 将数据库格式的规则配置转换为前端格式
+ * 新的数据库设计：rules 字段直接存储前端格式的 JSONB，无需复杂转换
  */
 function convertDbConfigToFrontend(dbConfig: FullAttendanceRuleConfig, companyKey: string): CompanyConfig | null {
     try {
         const defaultConfig = DEFAULT_CONFIGS[companyKey as 'eyewind' | 'hydodo'];
         if (!defaultConfig) return null;
 
-        // 转换迟到规则
-        const lateRules: LateRule[] = (dbConfig.lateRules || []).map((r: AttRuleDetail) => ({
-            previousDayCheckoutTime: r.time_start || '18:00',
-            lateThresholdTime: r.time_end || '09:01',
-            description: r.description || ''
-        }));
-
-        // 转换绩效扣款规则
-        const performancePenaltyRules: PerformancePenaltyRule[] = (dbConfig.penaltyRules || []).map((r: AttRuleDetail) => ({
-            minMinutes: r.min_value ?? 0,
-            maxMinutes: r.max_value ?? 999,
-            penalty: r.amount ?? 0,
-            description: r.description || ''
-        }));
-
-        // 转换全勤规则
-        const fullAttendanceRules: FullAttendanceRule[] = (dbConfig.fullAttendRules || []).map((r: AttRuleDetail) => ({
-            type: (r.rule_key || 'personal') as FullAttendanceRule['type'],
-            displayName: r.rule_name || '',
-            enabled: r.enabled ?? true,
-            threshold: r.threshold_hours ?? 0,
-            unit: (r.unit || 'count') as 'count' | 'hours'
-        }));
-
-        // 转换请假展示规则
-        const leaveDisplayRules: LeaveDisplayRule[] = (dbConfig.leaveDisplayRules || []).map((r: AttRuleDetail) => ({
-            leaveType: r.rule_key || '',
-            shortTermHours: r.threshold_hours ?? 24,
-            shortTermLabel: r.label_short || '',
-            longTermLabel: r.label_long || ''
-        }));
-
-        // 转换跨天打卡规则
-        const crossDayRules = (dbConfig.crossDayRules || []).map((r: AttRuleDetail) => ({
-            checkoutTime: r.time_start || '20:30',
-            nextDayCheckinTime: r.time_end || '09:30',
-            description: r.description || ''
-        }));
-
-        // 构建完整的规则配置
-        const rules: AttendanceRuleConfig = {
-            // 基础作息时间
-            workStartTime: dbConfig.work_start_time || defaultConfig.rules!.workStartTime,
-            workEndTime: dbConfig.work_end_time || defaultConfig.rules!.workEndTime,
-            lunchStartTime: dbConfig.lunch_start_time || defaultConfig.rules!.lunchStartTime,
-            lunchEndTime: dbConfig.lunch_end_time || defaultConfig.rules!.lunchEndTime,
-
-            // 迟到规则
-            lateRules: lateRules.length > 0 ? lateRules : defaultConfig.rules!.lateRules,
-            lateExemptionCount: dbConfig.late_exemption_count ?? defaultConfig.rules!.lateExemptionCount,
-            lateExemptionMinutes: dbConfig.late_exemption_minutes ?? defaultConfig.rules!.lateExemptionMinutes,
-            lateExemptionEnabled: dbConfig.late_exemption_enabled ?? defaultConfig.rules!.lateExemptionEnabled,
-
-            // 绩效扣款规则
-            performancePenaltyMode: dbConfig.perf_penalty_mode || 'capped',
-            unlimitedPenaltyThresholdTime: dbConfig.unlimited_threshold_time || '09:01',
-            unlimitedPenaltyCalcType: dbConfig.unlimited_calc_type || 'perMinute',
-            unlimitedPenaltyPerMinute: dbConfig.unlimited_per_minute ?? 5,
-            unlimitedPenaltyFixedAmount: dbConfig.unlimited_fixed_amount ?? 50,
-            cappedPenaltyType: dbConfig.capped_penalty_type || 'ladder',
-            cappedPenaltyPerMinute: dbConfig.capped_per_minute ?? 5,
-            maxPerformancePenalty: dbConfig.max_perf_penalty ?? 250,
-            performancePenaltyRules: performancePenaltyRules.length > 0 ? performancePenaltyRules : defaultConfig.rules!.performancePenaltyRules,
-            performancePenaltyEnabled: dbConfig.perf_penalty_enabled ?? defaultConfig.rules!.performancePenaltyEnabled,
-
-            // 请假规则
-            leaveDisplayRules: leaveDisplayRules.length > 0 ? leaveDisplayRules : defaultConfig.rules!.leaveDisplayRules,
-
-            // 全勤规则
-            fullAttendanceBonus: dbConfig.full_attend_bonus ?? defaultConfig.rules!.fullAttendanceBonus,
-            fullAttendanceAllowAdjustment: dbConfig.full_attend_allow_adj ?? defaultConfig.rules!.fullAttendanceAllowAdjustment,
-            fullAttendanceRules: fullAttendanceRules.length > 0 ? fullAttendanceRules : defaultConfig.rules!.fullAttendanceRules,
-            fullAttendanceEnabled: dbConfig.full_attend_enabled ?? defaultConfig.rules!.fullAttendanceEnabled,
-
-            // 出勤天数规则
-            attendanceDaysRules: {
-                enabled: dbConfig.attend_days_enabled ?? defaultConfig.rules!.attendanceDaysRules.enabled,
-                shouldAttendanceCalcMethod: dbConfig.should_attend_calc || 'workdays',
-                fixedShouldAttendanceDays: dbConfig.fixed_should_days ?? undefined,
-                includeHolidaysInShould: dbConfig.include_holidays_in_should ?? true,
-                actualAttendanceRules: {
-                    countLateAsAttendance: dbConfig.count_late_as_attend ?? true,
-                    countMissingAsAttendance: dbConfig.count_missing_as_attend ?? false,
-                    countHalfDayLeaveAsHalf: dbConfig.count_half_leave_as_half ?? true,
-                    minWorkHoursForFullDay: dbConfig.min_hours_for_full_day ?? 4,
-                    countHolidayAsAttendance: dbConfig.count_holiday_as_attend ?? true,
-                    countCompTimeAsAttendance: dbConfig.count_comp_time_as_attend ?? true,
-                    countPaidLeaveAsAttendance: dbConfig.count_paid_leave_as_attend ?? true,
-                    countTripAsAttendance: dbConfig.count_trip_as_attend ?? true,
-                    countOutAsAttendance: dbConfig.count_out_as_attend ?? true,
-                    countSickLeaveAsAttendance: dbConfig.count_sick_as_attend ?? false,
-                    countPersonalLeaveAsAttendance: dbConfig.count_personal_as_attend ?? false
-                }
-            },
-
-            // 法定调班规则
-            workdaySwapRules: {
-                enabled: dbConfig.workday_swap_enabled ?? true,
-                autoFollowNationalHoliday: dbConfig.auto_follow_national ?? true,
-                customDays: (dbConfig.swapDates || []).map((d: any) => ({
-                    date: d.target_date,
-                    type: d.swap_type || 'workday',
-                    reason: d.reason || ''
-                }))
-            },
-
-            // 居家办公规则
-            remoteWorkRules: {
-                enabled: dbConfig.remote_work_enabled ?? true,
-                requireApproval: dbConfig.remote_require_approval ?? false,
-                countAsNormalAttendance: dbConfig.remote_count_as_attend ?? true,
-                maxDaysPerMonth: dbConfig.remote_max_days_month ?? undefined,
-                allowedDaysOfWeek: dbConfig.remote_allowed_weekdays || [1, 2, 3, 4, 5],
-                remoteDays: (dbConfig.remoteDates || []).map((d: any) => ({
-                    date: d.target_date,
-                    reason: d.reason || '',
-                    timeMode: d.time_mode || 'day',
-                    startTime: d.start_time,
-                    endTime: d.end_time,
-                    scope: d.scope || 'all',
-                    departmentIds: d.scope_ids,
-                    userIds: d.scope_ids
-                }))
-            },
-
-            // 加班规则
-            overtimeCheckpoints: dbConfig.overtime_checkpoints || defaultConfig.rules!.overtimeCheckpoints,
-            weekendOvertimeThreshold: dbConfig.weekend_overtime_threshold ?? defaultConfig.rules!.weekendOvertimeThreshold,
-
-            // 跨天打卡规则
-            crossDayCheckout: {
-                enabled: dbConfig.cross_day_enabled ?? false,
-                rules: crossDayRules,
-                maxCheckoutTime: dbConfig.cross_day_max_checkout || '24:00',
-                nextDayCheckinTime: dbConfig.cross_day_next_checkin || '13:30'
-            }
-        };
+        // 新的数据库设计：rules 字段已经是前端格式，直接使用
+        // 使用可选链操作符处理可能不存在的 rules 属性
+        const rules = (dbConfig as any).rules || defaultConfig.rules;
 
         return {
             ...defaultConfig,
-            rules
+            rules: rules as AttendanceRuleConfig
         };
     } catch (e) {
         console.error('[convertDbConfigToFrontend] 转换失败:', e);
@@ -388,7 +291,7 @@ export async function getAppConfigAsync(companyKey: string, forceRefresh = false
 
     try {
         // 🔥 优先从数据库 API 获取最新配置（特别是在强制刷新时）
-        console.log(`[getAppConfigAsync] 开始加载 ${key} 配置，强制刷新: ${forceRefresh}`);
+        // console.log(`[getAppConfigAsync] 开始加载 ${key} 配置，强制刷新: ${forceRefresh}`);
         
         const dbConfig = await attendanceRuleApiService.getFullConfig(key as CompanyId, forceRefresh);
         
@@ -399,7 +302,7 @@ export async function getAppConfigAsync(companyKey: string, forceRefresh = false
             // 转换为前端格式
             const converted = convertDbConfigToFrontend(dbConfig, key);
             if (converted) {
-                console.log(`[getAppConfigAsync] ✅ 成功从数据库加载 ${key} 配置`);
+                // console.log(`[getAppConfigAsync] ✅ 成功从数据库加载 ${key} 配置`);
                 return converted;
             }
         }
@@ -420,7 +323,7 @@ export async function refreshDbRuleCache(companyKey: string): Promise<void> {
     const dbCacheKey = `${DB_RULE_CACHE_PREFIX}${key}`;
     
     try {
-        console.log(`[refreshDbRuleCache] 🔥 开始刷新 ${key} 的规则缓存`);
+        // console.log(`[refreshDbRuleCache] 🔥 开始刷新 ${key} 的规则缓存`);
         
         // 1. 清除 API 服务的内存缓存
         attendanceRuleApiService.clearCache(key as CompanyId);
@@ -446,11 +349,11 @@ export async function refreshDbRuleCache(companyKey: string): Promise<void> {
         // 4. 强制从数据库重新加载最新配置
         const freshConfig = await getAppConfigAsync(companyKey, true);
         
-        console.log(`[refreshDbRuleCache] ✅ 已刷新 ${key} 的规则缓存，新配置:`, {
-            workStartTime: freshConfig.rules?.workStartTime,
-            fullAttendanceBonus: freshConfig.rules?.fullAttendanceBonus,
-            performancePenaltyEnabled: freshConfig.rules?.performancePenaltyEnabled
-        });
+        // console.log(`[refreshDbRuleCache] ✅ 已刷新 ${key} 的规则缓存，新配置:`, {
+            // workStartTime: freshConfig.rules?.workStartTime,
+            // fullAttendanceBonus: freshConfig.rules?.fullAttendanceBonus,
+            // performancePenaltyEnabled: freshConfig.rules?.performancePenaltyEnabled
+        // });
         
         // 5. 触发全局配置更新事件（如果需要）
         window.dispatchEvent(new CustomEvent('configUpdated', { 
@@ -489,13 +392,32 @@ export function getDefaultMonth(): string {
 /**
  * 获取默认月份对应的日期范围
  * 用于列表数据拉取，确保上下文统一
+ * 
+ * 🔥 fromDate 优化：设置为上个月最后一个工作日
+ * - 如果上个月最后一个工作日有加班，需要获取该天的打卡数据用于跨月规则判断
+ * - 例如：查询2026-02时，fromDate可能是2026-01-31（如果是工作日）或更早的工作日
  */
 export function getDateRangeForDefaultMonth(): { fromDate: string, toDate: string, monthStr: string; year: number; month: number } {
     const monthStr = getDefaultMonth();
     const [y, m] = monthStr.split('-').map(Number);
     
-    // fromDate is the 1st of the month
-    const fromDate = `${monthStr}-02`;
+    // 🔥 计算上个月最后一个工作日作为 fromDate
+    // 这样可以获取跨月规则所需的上月最后一个工作日的打卡数据
+    const firstDayOfMonth = new Date(y, m - 1, 1); // 当月第一天
+    const lastDayOfPrevMonth = new Date(firstDayOfMonth);
+    lastDayOfPrevMonth.setDate(0); // 设置为上个月最后一天
+    
+    // 从上个月最后一天开始往前找，找到最后一个工作日
+    let lastWorkday = lastDayOfPrevMonth;
+    while (lastWorkday.getDay() === 0 || lastWorkday.getDay() === 6) {
+        // 如果是周末，继续往前找
+        lastWorkday.setDate(lastWorkday.getDate() - 1);
+    }
+    
+    // 格式化为 YYYY-MM-DD
+    const fromDate = `${lastWorkday.getFullYear()}-${String(lastWorkday.getMonth() + 1).padStart(2, '0')}-${String(lastWorkday.getDate()).padStart(2, '0')}`;
+    
+    // console.log(`[getDateRangeForDefaultMonth] 查询月份: ${monthStr}, fromDate: ${fromDate} (上月最后一个工作日)`);
     
     // 🔥 修复：toDate设置为下个月第一天，避免时区问题导致上个月数据被错误归类
     // 例如：查询2026-01时，toDate设置为2026-02-01，避免2025-12-31被错认为2026-01-31
@@ -520,7 +442,7 @@ export function getAppConfig(companyKey: string): CompanyConfig {
             const dbConfig = JSON.parse(dbCached);
             const converted = convertDbConfigToFrontend(dbConfig, normalizedKey);
             if (converted) {
-                console.log(`[getAppConfig] 使用数据库缓存配置: ${normalizedKey}`);
+                // console.log(`[getAppConfig] 使用数据库缓存配置: ${normalizedKey}`);
                 return converted;
             }
         } catch (e) {
@@ -532,7 +454,7 @@ export function getAppConfig(companyKey: string): CompanyConfig {
     
     // 🔥 如果没有数据库缓存，直接使用默认配置，不使用旧的本地存储
     // 这样可以避免使用过时的配置
-    console.log(`[getAppConfig] 使用默认配置: ${normalizedKey} (没有数据库缓存)`);
+    // console.log(`[getAppConfig] 使用默认配置: ${normalizedKey} (没有数据库缓存)`);
     return DEFAULT_CONFIGS[normalizedKey];
 }
 
@@ -583,12 +505,12 @@ export class HolidayCache {
             // 1. 尝试从IndexedDB缓存读取
             const cached = await SmartCache.get<any>(cacheKey);
             if (cached) {
-                console.log(`[HolidayCache] 使用缓存的节假日数据: ${year}`);
+                // console.log(`[HolidayCache] 使用缓存的节假日数据: ${year}`);
                 return cached;
             }
             
             // 2. 缓存未命中，从API获取
-            console.log(`[HolidayCache] 从API获取节假日数据: ${year}`);
+            // console.log(`[HolidayCache] 从API获取节假日数据: ${year}`);
             const response = await fetch(`https://timor.tech/api/holiday/year/${year}`);
             if (!response.ok) throw new Error('Failed to fetch holidays');
             
@@ -626,7 +548,7 @@ export class HolidayCache {
                 const store = transaction.objectStore(STORE_NAME);
                 const request = store.put(item, cacheKey);
                 request.onsuccess = () => {
-                    console.log(`[HolidayCache] 节假日数据已缓存: ${year}`);
+                    // console.log(`[HolidayCache] 节假日数据已缓存: ${year}`);
                     resolve();
                 };
                 request.onerror = () => reject(request.error);
@@ -642,7 +564,7 @@ export class HolidayCache {
     static async clearHolidays(year: number): Promise<void> {
         const cacheKey = `${this.CACHE_PREFIX}${year}`;
         await SmartCache.remove(cacheKey);
-        console.log(`[HolidayCache] 已清除节假日缓存: ${year}`);
+        // console.log(`[HolidayCache] 已清除节假日缓存: ${year}`);
     }
 }
 
@@ -674,8 +596,8 @@ export class DashboardCache {
         try {
             const cached = await SmartCache.get<any>(cacheKey);
             if (cached) {
-                console.log(`[DashboardCache] ✅ 使用月份仪表盘缓存: ${company} - ${yearMonth}`);
-                console.log(`[DashboardCache] 📅 缓存包含数据: ${cached.employees?.length || 0} 个员工, ${Object.keys(cached.processDataMap || {}).length} 个审批详情`);
+                // console.log(`[DashboardCache] ✅ 使用月份仪表盘缓存: ${company} - ${yearMonth}`);
+                // console.log(`[DashboardCache] 📅 缓存包含数据: ${cached.employees?.length || 0} 个员工, ${Object.keys(cached.processDataMap || {}).length} 个审批详情`);
                 return cached;
             }
             return null;
@@ -710,8 +632,8 @@ export class DashboardCache {
             };
             
             await SmartCache.set(cacheKey, cacheData);
-            console.log(`[DashboardCache] 💾 仪表盘数据已缓存到IndexedDB: ${company} - ${yearMonth}`);
-            console.log(`[DashboardCache] 📅 缓存内容: ${data.employees.length} 个员工, ${Object.keys(data.processDataMap).length} 个审批详情`);
+            // console.log(`[DashboardCache] 💾 仪表盘数据已缓存到IndexedDB: ${company} - ${yearMonth}`);
+            // console.log(`[DashboardCache] 📅 缓存内容: ${data.employees.length} 个员工, ${Object.keys(data.processDataMap).length} 个审批详情`);
         } catch (error) {
             console.error('[DashboardCache] 缓存仪表盘数据失败', error);
         }
@@ -723,7 +645,7 @@ export class DashboardCache {
     static async clearDashboardData(company: string, yearMonth: string): Promise<void> {
         const cacheKey = this.getCacheKey(company, yearMonth);
         await SmartCache.remove(cacheKey);
-        console.log(`[DashboardCache] 已清除仪表盘缓存: ${company} - ${yearMonth}`);
+        // console.log(`[DashboardCache] 已清除仪表盘缓存: ${company} - ${yearMonth}`);
     }
     
     /**
@@ -749,7 +671,7 @@ export class DashboardCache {
                     store.delete(key);
                 });
                 
-                console.log(`[DashboardCache] 已清除公司所有缓存: ${company}, 清除 ${companyKeys.length} 个缓存项`);
+                // console.log(`[DashboardCache] 已清除公司所有缓存: ${company}, 清除 ${companyKeys.length} 个缓存项`);
             };
         } catch (error) {
             console.error('[DashboardCache] 清除公司缓存失败', error);
@@ -937,7 +859,7 @@ class DingTalkTokenManager {
 
             if (this.refreshTimers[company]) clearTimeout(this.refreshTimers[company]);
 
-            const response = await fetch("https://sg.api.eyewind.cn/etl/dingding/gettoken", {
+            const response = await fetch("http://localhost:5001/etl/dingding/gettoken", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1297,19 +1219,19 @@ export const fetchCompanyData = async (mainCompany: string, fromDate: string, to
 
     // 🔥 检查是否有正在进行的相同请求
     if (pendingRequests.has(cacheKey)) {
-        console.log(`[fetchCompanyData] ⏳ 等待进行中的请求: ${cacheKey}`);
+        // console.log(`[fetchCompanyData] ⏳ 等待进行中的请求: ${cacheKey}`);
         return await pendingRequests.get(cacheKey);
     }
 
     // 1. Try Cache First
     const cachedData = await SmartCache.get<{ employees: DingTalkUser[]; companyCounts: CompanyCounts }>(cacheKey);
     if (cachedData) {
-        console.log(`[fetchCompanyData] ✅ 使用月份缓存数据: ${cacheKey}, 员工数: ${cachedData.employees.length}`);
-        console.log(`[fetchCompanyData] 📅 缓存月份: ${fromDate} 至 ${toDate}`);
+        // console.log(`[fetchCompanyData] ✅ 使用月份缓存数据: ${cacheKey}, 员工数: ${cachedData.employees.length}`);
+        // console.log(`[fetchCompanyData] 📅 缓存月份: ${fromDate} 至 ${toDate}`);
         return cachedData;
     }
 
-    console.log(`[fetchCompanyData] 🔄 缓存未命中，开始新的API请求: ${cacheKey}`);
+    // console.log(`[fetchCompanyData] 🔄 缓存未命中，开始新的API请求: ${cacheKey}`);
     
     // 2. 创建新的请求Promise
     const requestPromise = (async () => {
@@ -1377,14 +1299,14 @@ export const fetchCompanyData = async (mainCompany: string, fromDate: string, to
 
             // 3. Save to Cache
             await SmartCache.set(cacheKey, result);
-            console.log(`[fetchCompanyData] 💾 考勤数据已缓存到IndexedDB: ${cacheKey}`);
-            console.log(`[fetchCompanyData] 📅 缓存月份范围: ${fromDate} 至 ${toDate}`);
+            // console.log(`[fetchCompanyData] 💾 考勤数据已缓存到IndexedDB: ${cacheKey}`);
+            // console.log(`[fetchCompanyData] 📅 缓存月份范围: ${fromDate} 至 ${toDate}`);
             
             // OPTIMIZATION: Also cache the raw employee list for other components (like AttendancePage) to reuse without re-fetching
             // AttendancePage uses this specific key to look for employees.
             await SmartCache.set(`EMPLOYEES_LIST_${mainCompany}`, employees);
 
-            console.log(`[fetchCompanyData] API请求完成: ${cacheKey}, 员工数: ${employees.length}`);
+            // console.log(`[fetchCompanyData] API请求完成: ${cacheKey}, 员工数: ${employees.length}`);
             return result;
         };
 
@@ -1423,7 +1345,7 @@ export const fetchProcessDetail = async (procInstId: string, mainCompany: string
         const company = (mainCompany?.includes('海多多') || mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
         const accessToken = await dingTalkTokenManager.getToken(company);
 
-        const response = await fetch(`https://sg.api.eyewind.cn/etl/dingding/processInstances/${procInstId}`, {
+        const response = await fetch(`http://localhost:5001/etl/dingding/processInstances/${procInstId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ dingToken: accessToken })

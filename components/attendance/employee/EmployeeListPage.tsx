@@ -145,7 +145,7 @@ ${selectedDepartment === '全部'
     const loadData = async (forceRefresh = false) => {
         // 🔥 防重复调用检查
         if (loadingRef.current && !forceRefresh) {
-            console.log(`[EmployeeListPage] 数据正在加载中，跳过重复请求: ${currentCompany}`);
+            // console.log(`[EmployeeListPage] 数据正在加载中，跳过重复请求: ${currentCompany}`);
             return;
         }
         
@@ -170,11 +170,11 @@ ${selectedDepartment === '全部'
                     await SmartCache.remove(employeesCacheKey);
                 }
                 
-                console.log(`[EmployeeListPage] 从API加载员工数据: ${currentCompany}`);
+                // console.log(`[EmployeeListPage] 从API加载员工数据: ${currentCompany}`);
                 const data = await fetchCompanyData(currentCompany, fromDate, toDate, year, month);
                 employees = data.employees;
             } else {
-                console.log(`[EmployeeListPage] 使用缓存的员工数据: ${currentCompany}`);
+                // console.log(`[EmployeeListPage] 使用缓存的员工数据: ${currentCompany}`);
             }
             
             const uniqueUsers = Array.from(new Map(employees.map(u => [u.userid, u])).values());

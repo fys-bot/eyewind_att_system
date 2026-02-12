@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { attendanceService } from '../services/attendanceService';
+import { auditLogService } from '../services/auditLogService';
 import type { CompanyId, ApiResponse } from '../types/index';
 import type { EditLogQuery } from '../types/attendance';
 
@@ -25,10 +26,10 @@ router.get('/attendance/:companyId', async (req: Request, res: Response) => {
     const query: EditLogQuery = {
       page: parseInt(req.query.page as string) || 1,
       size: parseInt(req.query.size as string) || 20,
-      userId: req.query.userId as string || undefined,
-      startDate: req.query.startDate as string || undefined,
-      endDate: req.query.endDate as string || undefined,
-      editType: req.query.editType as any || undefined,
+      userId: (req.query.userId as string) || undefined,
+      startDate: (req.query.startDate as string) || undefined,
+      endDate: (req.query.endDate as string) || undefined,
+      editType: (req.query.editType as any) || undefined,
     };
     
     const data = await attendanceService.getEditLogs(companyId, query);
@@ -47,25 +48,31 @@ router.get('/attendance/:companyId', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/logs/audit - 获取系统审计日志
-router.get('/audit', async (req: Request, res: Response) => {
+router.get('/audit/:companyId', async (req: Request, res: Response) => {
   try {
-    // 这里可以从数据库获取审计日志，目前返回空数组
-    // 实际项目中应该有专门的审计日志表
-    const page = parseInt(req.query.page as string) || 1;
-    const size = parseInt(req.query.size as string) || 20;
-    const userId = req.query.userId as string || undefined;
-    const action = req.query.action as string || undefined;
-    const startDate = req.query.startDate as string || undefined;
-    const endDate = req.query.endDate as string || undefined;
+    const { companyId } = req.params;
     
-    // TODO: 实现从数据库获取审计日志的逻辑
-    // 目前返回模拟数据
-    const data = {
-      total: 0,
-      list: [],
-      page,
-      size,
+    if (!validateCompanyId(companyId)) {
+      return res.status(400).json({
+        code: 40002,
+        message: '无效的公司ID',
+      } as ApiResponse);
+    }
+    
+    const query = {
+      page: parseInt(req.query.page as string) || 1,
+      size: parseInt(req.query.size as string) || 20,
+      user_id: (req.query.userId as string) || undefined,
+      module: (req.query.module as string) || undefined,
+      action: (req.query.action as string) || undefined,
+      resource_type: (req.query.resourceType as string) || undefined,
+      status: (req.query.status as any) || undefined,
+      start_date: (req.query.startDate as string) || undefined,
+      end_date: (req.query.endDate as string) || undefined,
+      search_term: (req.query.searchTerm as string) || undefined,
     };
+    
+    const data = await auditLogService.query(companyId, query);
     
     res.json({
       code: 0,
@@ -99,13 +106,13 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
     } = {
       page: parseInt(req.query.page as string) || 1,
       size: parseInt(req.query.size as string) || 20,
-      userId: req.query.userId as string || undefined,
-      startDate: req.query.startDate as string || undefined,
-      endDate: req.query.endDate as string || undefined,
-      editType: req.query.editType as any || undefined,
-      logType: req.query.logType as any || 'all',
-      searchTerm: req.query.searchTerm as string || undefined,
-      action: req.query.action as string || undefined,
+      userId: (req.query.userId as string) || undefined,
+      startDate: (req.query.startDate as string) || undefined,
+      endDate: (req.query.endDate as string) || undefined,
+      editType: (req.query.editType as any) || undefined,
+      logType: (req.query.logType as any) || 'all',
+      searchTerm: (req.query.searchTerm as string) || undefined,
+      action: (req.query.action as string) || undefined,
     };
     
     const unifiedLogs: any[] = [];
@@ -150,10 +157,41 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
       }
     }
     
-    // TODO: 获取审计日志（从数据库）
+    // 获取审计日志
     if (query.logType === 'audit' || query.logType === 'all') {
-      // 这里应该从数据库获取审计日志
-      // 目前跳过
+      try {
+        const auditLogs = await auditLogService.query(companyId, {
+          page: 1,
+          size: 1000,
+          user_id: query.userId,
+          start_date: query.startDate,
+          end_date: query.endDate,
+          search_term: query.searchTerm,
+          action: query.action,
+        });
+        
+        // 转换为统一格式
+        const convertedLogs = auditLogs.list.map((log: any) => ({
+          id: `audit_${log.id}`,
+          type: 'audit',
+          timestamp: new Date(log.created_at).getTime(),
+          userId: log.user_id,
+          userName: log.user_name || undefined,
+          userRole: log.user_role || undefined,
+          action: log.action,
+          target: log.resource_name || log.resource_type || undefined,
+          details: log.description || log.change_summary || undefined,
+          clientIp: log.client_ip || undefined,
+          userAgent: log.user_agent || undefined,
+          oldValue: log.old_value,
+          newValue: log.new_value,
+          editReason: log.change_summary || undefined,
+        }));
+        
+        unifiedLogs.push(...convertedLogs);
+      } catch (err) {
+        console.warn('获取审计日志失败:', err);
+      }
     }
     
     // 统一排序
@@ -214,12 +252,69 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/v1/logs/audit/:logId - 删除审计日志（管理员功能）
+router.delete('/audit/:logId', async (req: Request, res: Response) => {
+  try {
+    const { logId } = req.params;
+    const editorId = (req.headers['x-user-id'] as string) || 'anonymous';
+    
+    const success = await auditLogService.delete(parseInt(logId));
+    
+    if (success) {
+      res.json({
+        code: 0,
+        message: '审计日志删除成功',
+      } as ApiResponse);
+    } else {
+      res.status(404).json({
+        code: 40004,
+        message: '日志不存在或删除失败',
+      } as ApiResponse);
+    }
+  } catch (error: any) {
+    console.error('删除审计日志失败:', error);
+    res.status(500).json({
+      code: 50002,
+      message: error.message || '数据库操作失败',
+    } as ApiResponse);
+  }
+});
+
+// POST /api/v1/logs/audit/batch-delete - 批量删除审计日志
+router.post('/audit/batch-delete', async (req: Request, res: Response) => {
+  try {
+    const { ids } = req.body;
+    const editorId = (req.headers['x-user-id'] as string) || 'anonymous';
+    
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        code: 40003,
+        message: '请提供要删除的日志ID列表',
+      } as ApiResponse);
+    }
+    
+    const deleted = await auditLogService.deleteBatch(ids);
+    
+    res.json({
+      code: 0,
+      message: `成功删除 ${deleted} 条审计日志`,
+      data: { deleted },
+    } as ApiResponse);
+  } catch (error: any) {
+    console.error('批量删除审计日志失败:', error);
+    res.status(500).json({
+      code: 50002,
+      message: error.message || '数据库操作失败',
+    } as ApiResponse);
+  }
+});
+
 // DELETE /api/v1/logs/attendance/:logId - 删除考勤编辑日志（管理员功能）
 router.delete('/attendance/:logId', async (req: Request, res: Response) => {
   try {
     const { logId } = req.params;
-    const editorId = req.headers['x-user-id'] as string || 'anonymous';
-    const editorName = req.headers['x-user-name'] as string || undefined;
+    const editorId = (req.headers['x-user-id'] as string) || 'anonymous';
+    const editorName = (req.headers['x-user-name'] as string) || undefined;
     
     // TODO: 实现删除考勤编辑日志的逻辑
     // 注意：删除日志是敏感操作，需要严格的权限控制

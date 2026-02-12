@@ -79,13 +79,13 @@ router.post('/dingtalk', async (req: Request, res: Response) => {
       }
     }
 
-    console.log('[DingTalk Push] 发送消息:', {
-      webhook: webhook.substring(0, 50) + '...',
-      contentLength: content.length,
-      atUsers: atUsers.length,
-      atMobiles: message.at?.atMobiles?.length || 0,
-      atUserIds: message.at?.atUserIds?.length || 0
-    });
+    // console.log('[DingTalk Push] 发送消息:', {
+      // webhook: webhook.substring(0, 50) + '...',
+      // contentLength: content.length,
+      // atUsers: atUsers.length,
+      // atMobiles: message.at?.atMobiles?.length || 0,
+      // atUserIds: message.at?.atUserIds?.length || 0
+    // });
 
     // 发送到钉钉
     const response = await axios.post(webhook, message, {
@@ -97,7 +97,7 @@ router.post('/dingtalk', async (req: Request, res: Response) => {
 
     // 检查钉钉返回结果
     if (response.data && response.data.errcode === 0) {
-      console.log('[DingTalk Push] 发送成功');
+      // console.log('[DingTalk Push] 发送成功');
       res.json({
         code: 0,
         message: '推送成功',

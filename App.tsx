@@ -183,12 +183,12 @@ const App: React.FC = () => {
 
     // 🔥 处理公司主体变更
     const handleCompanyChange = async (newCompany: string) => {
-        console.log('[App] 公司主体变更:', newCompany);
+        // console.log('[App] 公司主体变更:', newCompany);
         setCurrentCompany(newCompany);
         
         // 如果当前在考勤确认页面，清除缓存并重置页面
         if (page === 'attendanceManagement') {
-            console.log('[App] 公司变更时清除考勤确认相关缓存');
+            // console.log('[App] 公司变更时清除考勤确认相关缓存');
             // 清除考勤表单缓存
             const cacheKey = `ATTENDANCE_SHEETS_${newCompany}_${globalMonth}`;
             await SmartCache.remove(cacheKey);
@@ -224,7 +224,7 @@ const App: React.FC = () => {
 
     // 🔥 全局月份变更处理函数
     const handleGlobalMonthChange = (newMonth: string) => {
-        console.log('[App] 全局月份变更:', newMonth);
+        // console.log('[App] 全局月份变更:', newMonth);
         setGlobalMonth(newMonth);
         
         // 同步更新考勤仪表盘状态
@@ -280,14 +280,14 @@ const App: React.FC = () => {
 
     const handleNavigateToConfirmation = async (data: EmployeeAttendanceRecord[], month: string, mainCompany: string) => {
         // 🔥 清除考勤确认页面相关的缓存，确保每次都重新拉取数据
-        console.log('[App] 清除考勤确认相关缓存，强制重新加载数据');
+        // console.log('[App] 清除考勤确认相关缓存，强制重新加载数据');
         
         // 清除考勤表单缓存
         const cacheKey = `ATTENDANCE_SHEETS_${mainCompany}_${month}`;
         await SmartCache.remove(cacheKey);
         await SmartCache.remove('ATTENDANCE_SHEETS_RAW');
         
-        console.log('[App] 缓存清除完成，设置预加载数据并导航到考勤确认页面');
+        // console.log('[App] 缓存清除完成，设置预加载数据并导航到考勤确认页面');
         
         setAttendancePreloadData({ data, month, mainCompany });
         setAttendanceManagementKey(prev => prev + 1);

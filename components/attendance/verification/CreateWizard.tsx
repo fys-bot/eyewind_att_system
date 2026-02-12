@@ -503,7 +503,7 @@ export const CreateAttendanceWizard: React.FC<{
             
             // 🔥 处理304 Not Modified状态码
             if (response.status === 304) {
-                console.log(`[CreateWizard] 收到304响应，${month}月数据未修改，继续创建`);
+                // console.log(`[CreateWizard] 收到304响应，${month}月数据未修改，继续创建`);
                 proceedToCreateSheet(); 
                 return;
             } else if (!response.ok) { 

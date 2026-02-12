@@ -114,7 +114,7 @@ async function getModuleModelConfig(mainModule: string, subModule: string): Prom
             const data = await response.json();
             const configData = data.data || data;
             const modelValue = configData.model?.value || configData.model_name;
-            console.log(`[AI Service] Model config for ${mainModule}/${subModule}:`, modelValue);
+            // console.log(`[AI Service] Model config for ${mainModule}/${subModule}:`, modelValue);
             return modelValue || null;
         }
         

@@ -15,7 +15,7 @@ export const AttendancePhonePreview = React.forwardRef<HTMLDivElement, {
     lateExemptionEnabled?: boolean;
     fullAttendanceEnabled?: boolean;
 }>(({ sheet, record, onConfirmSignature, signatureBase64, dingTalkUsers, isDingTalkDataLoading, lateExemptionEnabled = true, fullAttendanceEnabled = true }, ref) => {
-    console.log('==> ============> sheet', sheet, record)
+    // console.log('==> ============> sheet', sheet, record)
     const [modal, setModal] = useState<'none' | 'feedback' | 'signature'>('none');
     const [isDailyDetailsOpen, setIsDailyDetailsOpen] = useState(false);
     const [isSummaryOpen, setIsSummaryOpen] = useState(true);

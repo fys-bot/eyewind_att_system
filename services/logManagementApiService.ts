@@ -316,6 +316,32 @@ class LogManagementApiService {
       };
     }
   }
+  /**
+   * 删除审计日志
+   */
+  async deleteAuditLog(logId: number): Promise<void> {
+    const response = await this.request<void>(
+      `/api/v1/logs/audit/${logId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  /**
+   * 批量删除审计日志
+   */
+  async batchDeleteAuditLogs(ids: number[]): Promise<number> {
+    const response = await this.request<{ deleted: number }>(
+      `/api/v1/logs/audit/batch-delete`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ ids }),
+      }
+    );
+    
+    return response.data?.deleted || 0;
+  }
 }
 
 export const logManagementApiService = new LogManagementApiService();

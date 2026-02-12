@@ -1,18 +1,6 @@
 
 export type Page = 'attendanceEmployee' | 'attendanceAdmin' | 'attendanceManagement' | 'parameterSettings' | 'attendanceRules' | 'help' | 'dashboard' | 'adminAccount' | 'modelManagement' | 'logManagement';
 
-// --- Audit Log ---
-export interface AuditLog {
-    id: string;
-    userId: string;
-    userName: string;
-    userRole: string;
-    action: 'LOGIN' | 'DOWNLOAD' | 'EDIT' | 'SEND' | 'RECALL' | 'ARCHIVE';
-    target?: string; // e.g., "June Report" or "John Doe's Record"
-    details?: string; // e.g., "Changed Status: Normal -> Late"
-    timestamp: number;
-}
-
 // --- AI & Settings ---
 export interface AiModuleConfig {
     modelName: string;
@@ -161,17 +149,11 @@ export interface AttendanceRuleConfig {
     overtimeCheckpoints: string[]; // ["19:30", "20:30", "22:00", "24:00"]
     weekendOvertimeThreshold: number; // 8 (周末加班影响周一的时长阈值)
     
-    // 跨天打卡规则
+    // 🔥 简化的跨天打卡规则配置（时间规则从 lateRules 读取）
     crossDayCheckout: {
-        enabled: boolean; // true
-        rules: Array<{
-            checkoutTime: string; // "20:30" (前一天打卡时间)
-            nextDayCheckinTime: string; // "09:30" (次日最晚打卡时间)
-            description: string; // "晚上8点半打卡，第二天可以早上9点半打卡"
-        }>;
-        // 保持向后兼容的字段
-        maxCheckoutTime: string; // "24:00" (最晚打卡时间)
-        nextDayCheckinTime: string; // "13:30" (次日最晚打卡时间)
+        enabled: boolean; // 是否启用跨天打卡规则
+        enableLookback?: boolean; // 是否启用向前查询（如果昨天没有下班打卡，继续查询前几天）
+        lookbackDays?: number; // 最多向前查询多少天（默认10天）
     };
 }
 

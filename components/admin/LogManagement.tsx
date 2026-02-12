@@ -97,6 +97,10 @@ export const LogManagement: React.FC<LogManagementProps> = ({
   
   // 详情弹窗
   const [selectedLog, setSelectedLog] = useState<UnifiedLogEntry | null>(null);
+  
+  // 选中的日志ID列表（用于批量删除）
+  const [selectedLogIds, setSelectedLogIds] = useState<Set<string>>(new Set());
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // 加载日志数据
   const loadLogs = useCallback(async () => {
@@ -163,6 +167,87 @@ export const LogManagement: React.FC<LogManagementProps> = ({
     } catch (error) {
       console.error('导出日志失败:', error);
       alert('导出失败，请重试');
+    }
+  };
+
+  // 切换选中状态
+  const toggleSelectLog = (logId: string) => {
+    setSelectedLogIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(logId)) {
+        newSet.delete(logId);
+      } else {
+        newSet.add(logId);
+      }
+      return newSet;
+    });
+  };
+
+  // 全选/取消全选
+  const toggleSelectAll = () => {
+    if (selectedLogIds.size === unifiedLogs.length) {
+      setSelectedLogIds(new Set());
+    } else {
+      setSelectedLogIds(new Set(unifiedLogs.map(log => log.id)));
+    }
+  };
+
+  // 删除单条日志
+  const deleteSingleLog = async (logId: string) => {
+    if (!confirm('确定要删除这条日志吗？此操作不可恢复。')) {
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      // 只删除审计日志
+      if (logId.startsWith('audit_')) {
+        const id = parseInt(logId.replace('audit_', ''));
+        await logManagementApiService.deleteAuditLog(id);
+        await loadLogs();
+        alert('删除成功');
+      } else {
+        alert('暂不支持删除考勤日志');
+      }
+    } catch (error) {
+      console.error('删除日志失败:', error);
+      alert('删除失败，请重试');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // 批量删除日志
+  const batchDeleteLogs = async () => {
+    if (selectedLogIds.size === 0) {
+      alert('请先选择要删除的日志');
+      return;
+    }
+
+    if (!confirm(`确定要删除选中的 ${selectedLogIds.size} 条日志吗？此操作不可恢复。`)) {
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      // 只删除审计日志
+      const auditLogIds = Array.from(selectedLogIds)
+        .filter((id: string) => id.startsWith('audit_'))
+        .map((id: string) => parseInt(id.replace('audit_', '')));
+
+      if (auditLogIds.length > 0) {
+        const deleted = await logManagementApiService.batchDeleteAuditLogs(auditLogIds);
+        await loadLogs();
+        setSelectedLogIds(new Set());
+        alert(`成功删除 ${deleted} 条日志`);
+      } else {
+        alert('暂不支持删除考勤日志');
+      }
+    } catch (error) {
+      console.error('批量删除日志失败:', error);
+      alert('删除失败，请重试');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -244,6 +329,17 @@ export const LogManagement: React.FC<LogManagementProps> = ({
               审计日志
             </button>
           </div>
+          
+          {selectedLogIds.size > 0 && (
+            <button
+              onClick={batchDeleteLogs}
+              disabled={isDeleting}
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-300 dark:hover:bg-red-800/30 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <TrashIcon className="w-4 h-4" />
+              删除选中 ({selectedLogIds.size})
+            </button>
+          )}
           
           <button
             onClick={() => setShowFilters(!showFilters)}
@@ -394,14 +490,45 @@ export const LogManagement: React.FC<LogManagementProps> = ({
           </div>
         ) : (
           <div className="space-y-3">
+            {/* 全选框 */}
+            {unifiedLogs.length > 0 && (
+              <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-200 dark:border-slate-700">
+                <input
+                  type="checkbox"
+                  checked={selectedLogIds.size === unifiedLogs.length && unifiedLogs.length > 0}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                />
+                <span className="text-sm text-slate-600 dark:text-slate-400">
+                  {selectedLogIds.size > 0 ? `已选中 ${selectedLogIds.size} 条` : '全选'}
+                </span>
+              </div>
+            )}
+            
             {unifiedLogs.map((log) => (
               <div
                 key={log.id}
-                onClick={() => setSelectedLog(log)}
-                className="p-4 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all cursor-pointer"
+                className="p-4 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-md transition-all"
               >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-3">
+                <div className="flex items-start justify-between gap-3">
+                  {/* 选择框 */}
+                  <div className="flex items-start pt-1">
+                    <input
+                      type="checkbox"
+                      checked={selectedLogIds.has(log.id)}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        toggleSelectLog(log.id);
+                      }}
+                      className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                    />
+                  </div>
+                  
+                  {/* 日志内容 */}
+                  <div 
+                    className="flex items-start gap-3 flex-1 cursor-pointer"
+                    onClick={() => setSelectedLog(log)}
+                  >
                     <div className="w-10 h-10 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center flex-shrink-0">
                       {log.type === 'attendance' ? (
                         <HistoryIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
@@ -409,7 +536,7 @@ export const LogManagement: React.FC<LogManagementProps> = ({
                         <ShieldCheckIcon className="w-5 h-5 text-green-600 dark:text-green-400" />
                       )}
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
                         <span className={`px-2 py-0.5 text-xs font-medium rounded ${
                           log.type === 'attendance' 
@@ -450,14 +577,31 @@ export const LogManagement: React.FC<LogManagementProps> = ({
                       )}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {formatDateTime(log.timestamp)}
-                    </div>
-                    {log.clientIp && (
-                      <div className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-                        IP: {log.clientIp}
+                  
+                  {/* 时间和删除按钮 */}
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="text-right">
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        {formatDateTime(log.timestamp)}
                       </div>
+                      {log.clientIp && (
+                        <div className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                          IP: {log.clientIp}
+                        </div>
+                      )}
+                    </div>
+                    {log.type === 'audit' && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSingleLog(log.id);
+                        }}
+                        disabled={isDeleting}
+                        className="p-1.5 text-red-600 hover:text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:text-red-300 dark:hover:bg-red-900/20 rounded transition-colors disabled:opacity-50"
+                        title="删除此日志"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
                     )}
                   </div>
                 </div>
@@ -589,14 +733,46 @@ export const LogManagement: React.FC<LogManagementProps> = ({
 
             {selectedLog.oldValue && (
               <div>
-                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">修改前数据</label>
-                <pre className="text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 p-3 rounded-lg overflow-auto max-h-40">
-                  {JSON.stringify(selectedLog.oldValue, null, 2)}
-                </pre>
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">修改前后数据</label>
+                <div className="space-y-2">
+                  {typeof selectedLog.oldValue === 'object' && selectedLog.oldValue !== null && Object.keys(selectedLog.oldValue).length > 0 ? (
+                    Object.entries(selectedLog.oldValue).map(([fieldName, values]: [string, any]) => {
+                      // 如果值包含 old 和 new 属性，说明是新格式
+                      if (values && typeof values === 'object' && 'old' in values && 'new' in values) {
+                        return (
+                          <div key={fieldName} className="bg-slate-50 dark:bg-slate-800 p-3 rounded-lg">
+                            <div className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{fieldName}</div>
+                            <div className="flex items-center gap-3 text-sm">
+                              <div className="flex-1">
+                                <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">修改前</div>
+                                <div className="px-2 py-1 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded font-mono">
+                                  {JSON.stringify(values.old)}
+                                </div>
+                              </div>
+                              <div className="text-slate-400">→</div>
+                              <div className="flex-1">
+                                <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">修改后</div>
+                                <div className="px-2 py-1 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 rounded font-mono">
+                                  {JSON.stringify(values.new)}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      // 旧格式：直接显示 JSON
+                      return null;
+                    })
+                  ) : (
+                    <pre className="text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 p-3 rounded-lg overflow-auto max-h-40">
+                      {JSON.stringify(selectedLog.oldValue, null, 2)}
+                    </pre>
+                  )}
+                </div>
               </div>
             )}
 
-            {selectedLog.newValue && (
+            {selectedLog.newValue && !selectedLog.oldValue && (
               <div>
                 <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">修改后数据</label>
                 <pre className="text-xs text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 p-3 rounded-lg overflow-auto max-h-40">

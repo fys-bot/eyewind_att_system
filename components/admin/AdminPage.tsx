@@ -1,19 +1,18 @@
 
 import React, { useState } from 'react';
-import { UserIcon, ShieldCheckIcon, HistoryIcon } from '../Icons.tsx';
+import { UserIcon, ShieldCheckIcon } from '../Icons.tsx';
 import { UserManagement } from './UserManagement.tsx';
 import { RoleManagement } from './RoleManagement.tsx';
-import { AuditLogViewer } from './AuditLogViewer.tsx';
 
 export const AdminPage: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'users' | 'roles' | 'audit'>('users');
+    const [activeTab, setActiveTab] = useState<'users' | 'roles'>('users');
 
     return (
         <div className="max-w-6xl mx-auto space-y-6">
             <header>
                 <h2 className="text-3xl font-bold text-slate-900 dark:text-white">账号与权限管理</h2>
                 <p className="text-slate-600 dark:text-slate-400 mt-1">
-                    管理系统后台账号、角色分配、功能权限控制及查看操作日志。
+                    管理系统后台账号、角色分配和功能权限控制。
                 </p>
             </header>
 
@@ -42,27 +41,14 @@ export const AdminPage: React.FC = () => {
                         <ShieldCheckIcon className="w-4 h-4" />
                         角色权限
                     </button>
-                    <button
-                        onClick={() => setActiveTab('audit')}
-                        className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors border-b-2 ${
-                            activeTab === 'audit'
-                                ? 'border-sky-500 text-sky-600 dark:text-sky-400'
-                                : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-                        }`}
-                    >
-                        <HistoryIcon className="w-4 h-4" />
-                        审计日志
-                    </button>
                 </div>
 
                 {/* Content */}
                 <div className="p-6 flex-1">
                     {activeTab === 'users' ? (
-                        <UserManagement />
-                    ) : activeTab === 'roles' ? (
-                        <RoleManagement />
+                        <UserManagement key="users" />
                     ) : (
-                        <AuditLogViewer />
+                        <RoleManagement key="roles" />
                     )}
                 </div>
             </div>

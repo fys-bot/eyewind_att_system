@@ -187,7 +187,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   useEffect(() => {
     const companyKey = currentCompany === 'eyewind' ? 'eyewind' : 'hydodo';
     const newLateExemptionEnabled = !!AttendanceRuleManager.getEngine(companyKey).getRules().lateExemptionEnabled;
-    console.log('AttendanceRuleManager AttendanceRuleManager AttendanceRuleManager', AttendanceRuleManager.getEngine(companyKey).getRules().lateExemptionEnabled, newLateExemptionEnabled, companyKey)
+    // console.log('AttendanceRuleManager AttendanceRuleManager AttendanceRuleManager', AttendanceRuleManager.getEngine(companyKey).getRules().lateExemptionEnabled, newLateExemptionEnabled, companyKey)
     setLateExemptionEnabled(newLateExemptionEnabled);
     const newFullAttendanceEnabled = AttendanceRuleManager.getEngine(companyKey).getRules().fullAttendanceEnabled ?? true;
     setFullAttendanceEnabled(newFullAttendanceEnabled);
@@ -250,7 +250,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   // - 如果有员工打卡数据缓存，复用该数据，只获取审批详情
   // - 如果都没有，从API获取所有数据
   const loadAllData = useCallback(async (forceRefresh = false, isSilent = false) => {
-    console.log(`[AttendanceDashboardPage] 🚀 开始加载数据: 公司=${currentCompany}, 月份=${globalMonth}, 强制刷新=${forceRefresh}`);
+    // console.log(`[AttendanceDashboardPage] 🚀 开始加载数据: 公司=${currentCompany}, 月份=${globalMonth}, 强制刷新=${forceRefresh}`);
     
     setLoadingDebounce(true);
     
@@ -259,7 +259,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     if (!forceRefresh) {
       cachedDashboardData = await DashboardCache.getDashboardData(currentCompany, globalMonth);
       if (cachedDashboardData) {
-        console.log(`[AttendanceDashboardPage] ✅ 使用完整仪表盘缓存: ${currentCompany} - ${globalMonth}`);
+        // console.log(`[AttendanceDashboardPage] ✅ 使用完整仪表盘缓存: ${currentCompany} - ${globalMonth}`);
         setAllUsers(cachedDashboardData.employees);
         setCompanyCounts(cachedDashboardData.companyCounts);
         setProcessDataMap(cachedDashboardData.processDataMap);
@@ -281,11 +281,37 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
     try {
       // 🔥 第二层：检查员工和打卡数据缓存
-      const fromDate = `${globalMonth}-02`;
+      // 🔥 修复跨月/跨周规则：需要获取上个月最后几天的数据
+      // 原因：
+      // 1. 跨月规则需要上月最后一个工作日的下班打卡时间
+      // 2. 跨周规则需要上周末（周五/周六/周日）的下班打卡时间
+      // 3. 如果本月第一天是周一，上周末可能在上个月
       const [y, m] = globalMonth.split('-').map(Number);
+      
+      // 获取本月第一天是星期几
+      const firstDayOfMonth = new Date(y, m - 1, 1);
+      const firstDayOfWeek = firstDayOfMonth.getDay(); // 0=周日, 1=周一, ..., 6=周六
+      
+      // 计算需要回溯多少天
+      let daysToGoBack = 1; // 默认至少获取上月最后一天
+      
+      if (firstDayOfWeek === 1) {
+        // 如果本月第一天是周一，需要获取上周五/六/日（回溯3天）
+        daysToGoBack = 3;
+      } else if (firstDayOfWeek === 0) {
+        // 如果本月第一天是周日，需要获取上周五/六（回溯2天）
+        daysToGoBack = 2;
+      }
+      
+      // 计算起始日期
+      const startDate = new Date(y, m - 1, 1 - daysToGoBack);
+      const fromDate = `${startDate.getFullYear()}-${String(startDate.getMonth() + 1).padStart(2, '0')}-${String(startDate.getDate()).padStart(2, '0')}`;
+      
       // 🔥 修复：toDate设置为下个月第一天，避免时区问题导致上个月数据被错误归类
       const nextMonth = new Date(y, m, 1); // 下个月第一天
       const toDate = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, '0')}-01`;
+      
+      console.log(`[AttendanceDashboardPage] 📅 数据获取范围: ${fromDate} 到 ${toDate} (回溯${daysToGoBack}天，支持跨月/跨周规则)`);
       
       const employeePunchCacheKey = `ATTENDANCE_DATA_${currentCompany}_${fromDate}_${toDate}`;
       let employeePunchData = null;
@@ -293,9 +319,9 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       if (!forceRefresh) {
         employeePunchData = await SmartCache.get<{ employees: DingTalkUser[]; companyCounts: CompanyCounts }>(employeePunchCacheKey);
         if (employeePunchData) {
-          console.log(`[AttendanceDashboardPage] 🎯 发现员工打卡数据缓存: ${employeePunchCacheKey}`);
+          // console.log(`[AttendanceDashboardPage] 🎯 发现员工打卡数据缓存: ${employeePunchCacheKey}`);
         } else {
-          console.log(`[AttendanceDashboardPage] ❌ 未发现员工打卡数据缓存: ${employeePunchCacheKey}`);
+          // console.log(`[AttendanceDashboardPage] ❌ 未发现员工打卡数据缓存: ${employeePunchCacheKey}`);
         }
       }
 
@@ -304,22 +330,22 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
       if (employeePunchData) {
         // 🔥 使用员工和打卡数据缓存
-        console.log(`[AttendanceDashboardPage] ✅ 使用员工打卡数据缓存，只需获取审批详情`);
-        console.log(`[AttendanceDashboardPage] 📊 缓存数据统计: ${employeePunchData.employees.length} 个员工, ${Object.keys(employeePunchData.companyCounts).length} 个公司`);
+        // console.log(`[AttendanceDashboardPage] ✅ 使用员工打卡数据缓存，只需获取审批详情`);
+        // console.log(`[AttendanceDashboardPage] 📊 缓存数据统计: ${employeePunchData.employees.length} 个员工, ${Object.keys(employeePunchData.companyCounts).length} 个公司`);
         uniqueUsers = Array.from(new Map((employeePunchData.employees as DingTalkUser[]).map((u: DingTalkUser) => [u.userid, u])).values());
         companyCounts = employeePunchData.companyCounts;
       } else {
         // 🔥 从API获取员工和打卡数据
-        console.log(`[AttendanceDashboardPage] 📡 从API获取员工和打卡数据: ${currentCompany}, ${globalMonth}`);
-        console.log(`[AttendanceDashboardPage] 🔄 缓存未命中，需要重新请求员工和打卡接口`);
+        // console.log(`[AttendanceDashboardPage] 📡 从API获取员工和打卡数据: ${currentCompany}, ${globalMonth}`);
+        // console.log(`[AttendanceDashboardPage] 🔄 缓存未命中，需要重新请求员工和打卡接口`);
         const data = await fetchCompanyData(currentCompany, fromDate, toDate, y, m);
         uniqueUsers = Array.from(new Map(data.employees.map((u: DingTalkUser) => [u.userid, u])).values());
         companyCounts = data.companyCounts;
-        console.log(`[AttendanceDashboardPage] 📊 API数据统计: ${uniqueUsers.length} 个员工, ${Object.keys(companyCounts).length} 个公司`);
+        // console.log(`[AttendanceDashboardPage] 📊 API数据统计: ${uniqueUsers.length} 个员工, ${Object.keys(companyCounts).length} 个公司`);
       }
 
       // 🔥 第三层：获取审批详情数据（这部分总是需要检查的）
-      console.log(`[AttendanceDashboardPage] 📋 检查审批详情数据...`);
+      // console.log(`[AttendanceDashboardPage] 📋 检查审批详情数据...`);
       const neededIds = new Set<string>();
       uniqueUsers.forEach(user => { 
         user.punchData?.forEach(record => { 
@@ -331,7 +357,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       const newProcessData: Record<string, any> = {};
       
       if (idsToFetch.length > 0) {
-        console.log(`[AttendanceDashboardPage] 📋 获取 ${idsToFetch.length} 个审批详情...`);
+        // console.log(`[AttendanceDashboardPage] 📋 获取 ${idsToFetch.length} 个审批详情...`);
         const BATCH_SIZE = 20;
         for (let i = 0; i < idsToFetch.length; i += BATCH_SIZE) {
           const chunk = idsToFetch.slice(i, i + BATCH_SIZE);
@@ -340,9 +366,9 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             if (pData) newProcessData[id] = pData;
           }));
         }
-        console.log(`[AttendanceDashboardPage] ✅ 审批详情获取完成: ${Object.keys(newProcessData).length} 个`);
+        // console.log(`[AttendanceDashboardPage] ✅ 审批详情获取完成: ${Object.keys(newProcessData).length} 个`);
       } else {
-        console.log(`[AttendanceDashboardPage] ℹ️ 无需获取审批详情`);
+        // console.log(`[AttendanceDashboardPage] ℹ️ 无需获取审批详情`);
       }
 
       // 设置状态
@@ -359,14 +385,14 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       };
       
       await DashboardCache.setDashboardData(currentCompany, globalMonth, dashboardData);
-      console.log(`[AttendanceDashboardPage] 💾 仪表盘数据已缓存`);
+      // console.log(`[AttendanceDashboardPage] 💾 仪表盘数据已缓存`);
       
       // 🔥 如果使用了缓存的员工打卡数据，说明缓存协调工作正常
       if (employeePunchData) {
-        console.log(`[AttendanceDashboardPage] ✅ 缓存协调成功：复用员工打卡数据，仅获取审批详情`);
+        // console.log(`[AttendanceDashboardPage] ✅ 缓存协调成功：复用员工打卡数据，仅获取审批详情`);
       }
       
-      console.log(`[AttendanceDashboardPage] ✅ 数据加载完成: ${uniqueUsers.length} 个用户, ${Object.keys(newProcessData).length} 个审批详情`);
+      // console.log(`[AttendanceDashboardPage] ✅ 数据加载完成: ${uniqueUsers.length} 个用户, ${Object.keys(newProcessData).length} 个审批详情`);
     } catch (err) {
       console.error('[AttendanceDashboardPage] 数据加载失败:', err);
       if (!isSilent) setError(err instanceof Error ? err.message : "加载数据失败，请稍后重试。");
@@ -392,7 +418,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     // 🔥 只有在公司或月份真正发生变化时才清理缓存（跳过初始化）
     if (lastCompanyMonth !== currentKey && lastCompanyMonth !== `${currentCompany}_${globalMonth}`) {
       const clearRelatedCaches = async () => {
-        console.log(`[AttendanceDashboardPage] 🔥 公司或月份变化检测到，清理相关缓存: ${lastCompanyMonth} -> ${currentKey}`);
+        // console.log(`[AttendanceDashboardPage] 🔥 公司或月份变化检测到，清理相关缓存: ${lastCompanyMonth} -> ${currentKey}`);
         
         // 🔥 使用新的仪表盘缓存清理系统
         await DashboardCache.clearDashboardData(currentCompany, globalMonth);
@@ -416,14 +442,14 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         setProcessDataMap({});
         setError(null);
         
-        console.log(`[AttendanceDashboardPage] ✅ 缓存清理完成，准备重新加载数据`);
+        // console.log(`[AttendanceDashboardPage] ✅ 缓存清理完成，准备重新加载数据`);
       };
       
       clearRelatedCaches();
     } else if (lastCompanyMonth === currentKey) {
-      console.log(`[AttendanceDashboardPage] ℹ️ 公司和月份未变化，保持缓存: ${currentKey}`);
+      // console.log(`[AttendanceDashboardPage] ℹ️ 公司和月份未变化，保持缓存: ${currentKey}`);
     } else {
-      console.log(`[AttendanceDashboardPage] 🚀 初始化加载，不清理缓存: ${currentKey}`);
+      // console.log(`[AttendanceDashboardPage] 🚀 初始化加载，不清理缓存: ${currentKey}`);
     }
     
     // 🔥 更新最后的公司月份组合
@@ -435,13 +461,13 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     const initRuleConfig = async () => {
       try {
         // 🔥 每次进入页面都强制刷新当前公司的规则配置
-        console.log(`[AttendanceDashboardPage] 强制刷新 ${currentCompany} 的规则配置`);
+        // console.log(`[AttendanceDashboardPage] 强制刷新 ${currentCompany} 的规则配置`);
         await refreshRuleConfigCache(currentCompany);
         
         // 🔥 刷新完成后，重新加载规则引擎
         AttendanceRuleManager.reloadAllRules();
         
-        console.log('[AttendanceDashboardPage] 规则配置缓存已刷新，规则引擎已重新加载');
+        // console.log('[AttendanceDashboardPage] 规则配置缓存已刷新，规则引擎已重新加载');
         setRuleConfigLoaded(true);
       } catch (error) {
         console.error('[AttendanceDashboardPage] 刷新规则配置失败:', error);
@@ -457,18 +483,18 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   // 🔥 规则配置加载完成后再加载数据，同时监听公司和月份变化
   useEffect(() => { 
     if (ruleConfigLoaded && loadAllDataRef.current) {
-      console.log('[AttendanceDashboardPage] 规则配置已加载，开始加载数据');
+      // console.log('[AttendanceDashboardPage] 规则配置已加载，开始加载数据');
       loadAllDataRef.current(); 
     }
   }, [ruleConfigLoaded, globalMonth, currentCompany]); // 🔥 添加globalMonth和currentCompany依赖，确保切换时重新加载数据
 
   useEffect(() => {
     const initMap = async () => {
-        console.log(`[AttendanceDashboardPage] 开始初始化考勤地图: ${allUsers.length} 个用户`);
+        // console.log(`[AttendanceDashboardPage] 开始初始化考勤地图: ${allUsers.length} 个用户`);
         const cacheKey = `ATTENDANCE_MAP_CACHE_${currentCompany}_${globalMonth}`;
         const cachedMap = await SmartCache.get<AttendanceMap>(cacheKey);
         if (cachedMap) { 
-          console.log(`[AttendanceDashboardPage] 使用缓存的考勤地图`);
+          // console.log(`[AttendanceDashboardPage] 使用缓存的考勤地图`);
           setAttendanceMap(cachedMap); 
           setHistory([]); 
           return; 
@@ -495,25 +521,25 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
               
               // 严格验证：记录的年月必须与全局年月完全匹配
               if (recordYear !== globalYear || recordMonth !== globalMonthNum) {
-                console.log(`[FILTER] 过滤掉不属于${globalMonth}的数据:`, {
-                  userName: user.name,
-                  recordDate: `${recordYear}-${recordMonth.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
-                  globalMonth: globalMonth,
-                  reason: `记录属于${recordYear}-${recordMonth.toString().padStart(2, '0')}，不属于查询月份${globalMonth}`
-                });
+                // console.log(`[FILTER] 过滤掉不属于${globalMonth}的数据:`, {
+                //   userName: user.name,
+                //   recordDate: `${recordYear}-${recordMonth.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
+                //   globalMonth: globalMonth,
+                //   reason: `记录属于${recordYear}-${recordMonth.toString().padStart(2, '0')}，不属于查询月份${globalMonth}`
+                // });
                 return dayAcc; // 跳过这条记录
               }
               
               // 🔥 添加调试信息，确认数据正确性
               if (day === 31) {
-                console.log(`[DEBUG] 确认31号数据属于${globalMonth}:`, {
-                  userName: user.name,
-                  originalWorkDate: record.workDate,
-                  parsedDate: `${recordYear}-${recordMonth.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
-                  globalMonth: globalMonth,
-                  checkType: record.checkType,
-                  userCheckTime: record.userCheckTime
-                });
+                // console.log(`[DEBUG] 确认31号数据属于${globalMonth}:`, {
+                //   userName: user.name,
+                //   originalWorkDate: record.workDate,
+                //   parsedDate: `${recordYear}-${recordMonth.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
+                //   globalMonth: globalMonth,
+                //   checkType: record.checkType,
+                //   userCheckTime: record.userCheckTime
+                // });
               }
               
               if (!dayAcc[day]) dayAcc[day] = [];
@@ -553,14 +579,14 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
           return acc;
         }, {} as AttendanceMap);
         
-        console.log(`[AttendanceDashboardPage] 考勤地图初始化完成: ${Object.keys(map).length} 个用户`);
+        // console.log(`[AttendanceDashboardPage] 考勤地图初始化完成: ${Object.keys(map).length} 个用户`);
         setAttendanceMap(map); 
         setHistory([]); 
     };
     if (allUsers.length > 0) { 
       initMap(); 
     } else { 
-      console.log(`[AttendanceDashboardPage] 没有用户数据，清空考勤地图`);
+      // console.log(`[AttendanceDashboardPage] 没有用户数据，清空考勤地图`);
       setAttendanceMap({}); 
     }
   }, [allUsers, globalMonth, currentCompany]);
@@ -583,7 +609,20 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     fetchHolidays();
   }, [year]);
 
-  const statsData = useAttendanceStats(allUsers, attendanceMap, processDataMap, holidays, year, monthIndex);
+  // 🔥 添加规则更新触发器，确保规则更新后重新计算统计数据
+  const [ruleUpdateTrigger, setRuleUpdateTrigger] = useState(0);
+  
+  useEffect(() => {
+    const handleRulesUpdate = () => {
+      console.log('[AttendanceDashboardPage] 检测到规则更新，触发数据重新计算');
+      setRuleUpdateTrigger(prev => prev + 1);
+    };
+    
+    window.addEventListener('attendanceRulesUpdated', handleRulesUpdate);
+    return () => window.removeEventListener('attendanceRulesUpdated', handleRulesUpdate);
+  }, []);
+
+  const statsData = useAttendanceStats(allUsers, attendanceMap, processDataMap, holidays, year, monthIndex, ruleUpdateTrigger);
   const { companyEmployeeStats, companyAggregate, dailyTrend } = statsData;
 
   // 预设的可艾特人员列表（从所有公司的员工统计中获取）
@@ -671,7 +710,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
           // });
         
         setAllCompanyUsers(uniqueUsers);
-        console.log(`[AttendanceDashboardPage] 已加载员工列表: 预设 ${uniqueUsers.filter(u => u.company === '财务').length} 人, ${currentCompany === 'eyewind' ? '风眼' : '海多多'} ${uniqueUsers.filter(u => u.company !== '财务').length} 人, 共 ${uniqueUsers.length} 人`);
+        // console.log(`[AttendanceDashboardPage] 已加载员工列表: 预设 ${uniqueUsers.filter(u => u.company === '财务').length} 人, ${currentCompany === 'eyewind' ? '风眼' : '海多多'} ${uniqueUsers.filter(u => u.company !== '财务').length} 人, 共 ${uniqueUsers.length} 人`);
       } catch (error) {
         console.error('[AttendanceDashboardPage] 加载员工列表失败:', error);
       }
@@ -688,30 +727,30 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
   // 🔥 更完善的数据加载状态检测，添加详细调试信息
   const isDataLoading = useMemo(() => {
-    console.log('[AttendanceDashboardPage] 检查数据加载状态:', {
-      allUsersLength: allUsers.length,
-      attendanceMapKeys: Object.keys(attendanceMap).length,
-      companyEmployeeStats: companyEmployeeStats ? Object.keys(companyEmployeeStats).length : 'null',
-      isLoading,
-      isRefreshing,
-      ruleConfigLoaded
-    });
+    // console.log('[AttendanceDashboardPage] 检查数据加载状态:', {
+    //   allUsersLength: allUsers.length,
+    //   attendanceMapKeys: Object.keys(attendanceMap).length,
+    //   companyEmployeeStats: companyEmployeeStats ? Object.keys(companyEmployeeStats).length : 'null',
+    //   isLoading,
+    //   isRefreshing,
+    //   ruleConfigLoaded
+    // });
     
     // 1. 如果基础加载状态为true，直接返回true
     if (isLoading || isRefreshing) {
-      console.log('[AttendanceDashboardPage] 基础加载状态为true');
+      // console.log('[AttendanceDashboardPage] 基础加载状态为true');
       return true;
     }
     
     // 2. 如果规则配置未加载，返回true
     if (!ruleConfigLoaded) {
-      console.log('[AttendanceDashboardPage] 规则配置未加载');
+      // console.log('[AttendanceDashboardPage] 规则配置未加载');
       return true;
     }
     
     // 3. 如果没有用户数据，说明还在初始加载
     if (allUsers.length === 0) {
-      console.log('[AttendanceDashboardPage] 没有用户数据');
+      // console.log('[AttendanceDashboardPage] 没有用户数据');
       return true;
     }
     
@@ -720,7 +759,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     
     // 5. 🔥 放宽统计数据的检查 - 如果有用户数据，就认为可以显示
     if (!companyEmployeeStats) {
-      console.log('[AttendanceDashboardPage] 统计数据为null，但有用户数据，继续检查');
+      // console.log('[AttendanceDashboardPage] 统计数据为null，但有用户数据，继续检查');
       // 不直接返回true，继续检查
     }
     
@@ -730,18 +769,18 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         Array.isArray(employees) && employees.length > 0
       );
       if (hasEmployeeData) {
-        console.log('[AttendanceDashboardPage] 有完整的统计数据');
+        // console.log('[AttendanceDashboardPage] 有完整的统计数据');
         return false;
       }
     }
     
     // 7. 🔥 如果有用户数据但没有统计数据，可能是统计计算中，给一个短暂的等待时间
     if (allUsers.length > 0) {
-      console.log('[AttendanceDashboardPage] 有用户数据但统计数据不完整，允许显示');
+      // console.log('[AttendanceDashboardPage] 有用户数据但统计数据不完整，允许显示');
       return false; // 🔥 允许显示，不要一直等待统计数据
     }
     
-    console.log('[AttendanceDashboardPage] 默认返回加载中');
+    // console.log('[AttendanceDashboardPage] 默认返回加载中');
     return true;
   }, [allUsers, attendanceMap, companyEmployeeStats, isLoading, isRefreshing, ruleConfigLoaded]);
 
@@ -852,16 +891,16 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     }
 
     // Log Audit Event
-    if (currentUserInfo) {
-        db.addAuditLog({
-            userId: currentUserInfo.id,
-            userName: currentUserInfo.name,
-            userRole: currentUserInfo.roleName || 'Unknown',
-            action: 'DOWNLOAD',
-            target: `${globalMonth}考勤报表`,
-            details: `下载了${companyName === 'eyewind' ? '风眼' : '海多多'}的考勤统计报表`
-        });
-    }
+    // if (currentUserInfo) {
+    //     db.addAuditLog({
+    //         userId: currentUserInfo.id,
+    //         userName: currentUserInfo.name,
+    //         userRole: currentUserInfo.roleName || 'Unknown',
+    //         action: 'DOWNLOAD',
+    //         target: `${globalMonth}考勤报表`,
+    //         details: `下载了${companyName === 'eyewind' ? '风眼' : '海多多'}的考勤统计报表`
+    //     });
+    // }
 
     const zip = new JSZip();
     const monthStr = globalMonth.slice(5, 7);
@@ -1566,16 +1605,16 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     });
 
     // 记录审计日志
-    if (currentUserInfo) {
-      db.addAuditLog({
-        userId: currentUserInfo.id,
-        userName: currentUserInfo.name,
-        userRole: currentUserInfo.roleName || 'Unknown',
-        action: 'DOWNLOAD',
-        target: `${globalMonth}自定义报表`,
-        details: `下载了自定义考勤报表，包含字段：${selectedColumns.map(k => availableColumns.find(c => c.key === k)?.label).join('、')}`
-      });
-    }
+    // if (currentUserInfo) {
+    //   db.addAuditLog({
+    //     userId: currentUserInfo.id,
+    //     userName: currentUserInfo.name,
+    //     userRole: currentUserInfo.roleName || 'Unknown',
+    //     action: 'DOWNLOAD',
+    //     target: `${globalMonth}自定义报表`,
+    //     details: `下载了自定义考勤报表，包含字段：${selectedColumns.map(k => availableColumns.find(c => c.key === k)?.label).join('、')}`
+    //   });
+    // }
 
     setShowCustomDownloadModal(false);
   };
@@ -1622,16 +1661,16 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       if (result.success) {
         setPushResult({ success: true, message: result.message });
         // 记录审计日志
-        if (currentUserInfo) {
-          db.addAuditLog({
-            userId: currentUserInfo.id,
-            userName: currentUserInfo.name,
-            userRole: currentUserInfo.roleName || 'Unknown',
-            action: 'SEND',
-            target: `${globalMonth}考勤推送`,
-            details: `通过 Webhook 推送了考勤统计报告${selectedAtUsers.length > 0 ? `，@了${selectedAtUsers.map(u => u.name).join('、')}` : ''}`
-          });
-        }
+        // if (currentUserInfo) {
+        //   db.addAuditLog({
+        //     userId: currentUserInfo.id,
+        //     userName: currentUserInfo.name,
+        //     userRole: currentUserInfo.roleName || 'Unknown',
+        //     action: 'SEND',
+        //     target: `${globalMonth}考勤推送`,
+        //     details: `通过 Webhook 推送了考勤统计报告${selectedAtUsers.length > 0 ? `，@了${selectedAtUsers.map(u => u.name).join('、')}` : ''}`
+        //   });
+        // }
       } else {
         setPushResult({ success: false, message: result.message });
       }
@@ -1648,7 +1687,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     if (!targetStats || targetStats.length === 0) { alert('没有数据可用于生成考勤确认单。'); return; }
     
     // 🔥 清除考勤确认相关的缓存，确保每次点击都重新拉取数据
-    console.log('[AttendanceDashboardPage] 清除考勤确认相关缓存，强制重新加载数据');
+    // console.log('[AttendanceDashboardPage] 清除考勤确认相关缓存，强制重新加载数据');
     
     // 清除考勤表单缓存
     const cacheKey = `ATTENDANCE_SHEETS_${targetCompanyName}_${globalMonth}`;
@@ -1658,7 +1697,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     // 清除仪表盘缓存，确保数据是最新的
     await DashboardCache.clearDashboardData(targetCompanyName, globalMonth);
     
-    console.log('[AttendanceDashboardPage] 缓存清除完成，准备导航到考勤确认页面');
+    // console.log('[AttendanceDashboardPage] 缓存清除完成，准备导航到考勤确认页面');
     
     const records: EmployeeAttendanceRecord[] = targetStats.map(({ user, stats }) => {
         // 构建dailyData字段

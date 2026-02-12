@@ -48,15 +48,15 @@ export const AttendanceDetailView: React.FC<{
     currentUserInfo?: User; // New Prop for logging
 }> = ({ sheet, onBack, onUpdateSheet, mainCompany, dingTalkUsers, isDingTalkDataLoading, onRefresh, isRefreshing, trigger, userPermissions = [], currentUserInfo }) => {
     // 🔥 添加调试日志
-    console.log('[DetailView] 组件渲染，sheet数据:', {
-        sheetId: sheet?.id,
-        sheetTitle: sheet?.title,
-        sheetMonth: sheet?.month,
-        employeeRecordsLength: sheet?.employeeRecords?.length,
-        employeeRecords: sheet?.employeeRecords,
-        hasSettings: !!sheet?.settings,
-        mainCompany
-    });
+    // console.log('[DetailView] 组件渲染，sheet数据:', {
+        // sheetId: sheet?.id,
+        // sheetTitle: sheet?.title,
+        // sheetMonth: sheet?.month,
+        // employeeRecordsLength: sheet?.employeeRecords?.length,
+        // employeeRecords: sheet?.employeeRecords,
+        // hasSettings: !!sheet?.settings,
+        // mainCompany
+    // });
 
     const [searchTerm, setSearchTerm] = useState('');
     const [filterStatus, setFilterStatus] = useState('all');
@@ -137,15 +137,7 @@ export const AttendanceDetailView: React.FC<{
                 onUpdateSheet({ ...sheet, employeeRecords: newAllRecords });
                 setAutoConfirmationStatus('done');
                 
-                // Audit Log System Auto-Confirm
-                db.addAuditLog({
-                    userId: 'system',
-                    userName: '系统自动',
-                    userRole: 'System',
-                    action: 'EDIT',
-                    target: `${sheet.title} (${updatedRecords.length} 人)`,
-                    details: '触发自动确认逻辑'
-                });
+                // TODO: 集成后端 API 后，操作日志将由后端自动记录
 
             } catch (error) {
                 setAutoConfirmationStatus('error');
@@ -207,17 +199,7 @@ export const AttendanceDetailView: React.FC<{
         } else if (archivingRecordId === null && bulkArchiveQueue.length === 0 && bulkArchiveProgress !== null) {
             alert(`批量存档完成！共处理 ${bulkArchiveProgress.total} 个文件。`);
             
-            // Audit Log Bulk Archive
-            if (currentUserInfo) {
-                db.addAuditLog({
-                    userId: currentUserInfo.id,
-                    userName: currentUserInfo.name,
-                    userRole: currentUserInfo.roleName || 'Unknown',
-                    action: 'ARCHIVE',
-                    target: sheet.title,
-                    details: `批量存档完成，共处理 ${bulkArchiveProgress.total} 个文件`
-                });
-            }
+            // TODO: 集成后端 API 后，操作日志将由后端自动记录
 
             setBulkArchiveProgress(null);
             onRefresh(sheet.month);
@@ -267,17 +249,7 @@ export const AttendanceDetailView: React.FC<{
         setArchivingRecordId(record.id);
         setRecordToCapture(record);
         
-        // Audit Log Single Archive
-        if (currentUserInfo) {
-            db.addAuditLog({
-                userId: currentUserInfo.id,
-                userName: currentUserInfo.name,
-                userRole: currentUserInfo.roleName || 'Unknown',
-                action: 'ARCHIVE',
-                target: record.employeeName,
-                details: '生成/下载单人考勤存档'
-            });
-        }
+        // TODO: 集成后端 API 后，操作日志将由后端自动记录
     };
 
     const handleBulkSend = () => {
@@ -329,17 +301,7 @@ export const AttendanceDetailView: React.FC<{
                 await upsertAttendanceDataToDb(sheet, successfullySentRecordsForDbUpdate, dingTalkUsers, mainCompany);
                 onUpdateSheet({ ...sheet, employeeRecords: newRecords });
 
-                // Audit Log Send
-                if (currentUserInfo) {
-                    db.addAuditLog({
-                        userId: currentUserInfo.id,
-                        userName: currentUserInfo.name,
-                        userRole: currentUserInfo.roleName || 'Unknown',
-                        action: 'SEND',
-                        target: `考勤通知 (${successfulSends.size} 人)`,
-                        details: `成功向 ${Array.from(successfulSends.keys()).join(', ')} 发送通知`
-                    });
-                }
+                // TODO: 集成后端 API 后，操作日志将由后端自动记录
             }
             setRecordsForPreview([]);
         } catch (error) {
@@ -390,17 +352,7 @@ export const AttendanceDetailView: React.FC<{
                 await upsertAttendanceDataToDb(sheet, recordsToUpsert, dingTalkUsers, mainCompany);
                 onUpdateSheet({ ...sheet, employeeRecords: newRecords });
                 
-                // Audit Log Recall
-                if (currentUserInfo) {
-                    db.addAuditLog({
-                        userId: currentUserInfo.id,
-                        userName: currentUserInfo.name,
-                        userRole: currentUserInfo.roleName || 'Unknown',
-                        action: 'RECALL',
-                        target: `考勤通知 (${successfulRecalls.size} 人)`,
-                        details: `撤回了 ${Array.from(successfulRecalls).join(', ')} 的通知`
-                    });
-                }
+                // TODO: 集成后端 API 后，操作日志将由后端自动记录
 
                 if (type === 'bulk') { alert(`成功撤回 ${successfulRecalls.size} 条通知。`); }
             } else { alert('撤回请求失败'); }
@@ -408,17 +360,17 @@ export const AttendanceDetailView: React.FC<{
     };
 
     const filteredRecords = useMemo(() => {
-        console.log('[DetailView] filteredRecords计算，输入数据:', {
-            hasEmployeeRecords: !!sheet.employeeRecords,
-            isArray: Array.isArray(sheet.employeeRecords),
-            length: sheet.employeeRecords?.length,
-            searchTerm,
-            filterStatus,
-            employeeRecords: sheet.employeeRecords
-        });
+        // console.log('[DetailView] filteredRecords计算，输入数据:', {
+            // hasEmployeeRecords: !!sheet.employeeRecords,
+            // isArray: Array.isArray(sheet.employeeRecords),
+            // length: sheet.employeeRecords?.length,
+            // searchTerm,
+            // filterStatus,
+            // employeeRecords: sheet.employeeRecords
+        // });
 
         if (!sheet.employeeRecords || !Array.isArray(sheet.employeeRecords)) {
-            console.log('[DetailView] employeeRecords为空或不是数组，返回空数组');
+            // console.log('[DetailView] employeeRecords为空或不是数组，返回空数组');
             return [];
         }
         
@@ -435,7 +387,7 @@ export const AttendanceDetailView: React.FC<{
             return nameMatch && statusMatch;
         });
         
-        console.log('[DetailView] 过滤后的记录数量:', filtered.length);
+        // console.log('[DetailView] 过滤后的记录数量:', filtered.length);
         return filtered;
     }, [sheet.employeeRecords, searchTerm, filterStatus]);
 

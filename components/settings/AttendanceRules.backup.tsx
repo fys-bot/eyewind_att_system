@@ -54,19 +54,19 @@ export const AttendanceRulesPage: React.FC = () => {
     const [isCurrentlyLoading, setIsCurrentlyLoading] = useState(false);
     const isMountedRef = useRef(true);
 
-    // 🔥 组件挂载时立即设置 ref，并在卸载时清理
+    // 🔥 组件挂载时立即设置为已挂载状态
     useEffect(() => {
-        // console.log('[AttendanceRules] 🟢 组件挂载');
         isMountedRef.current = true;
+        // console.log('[AttendanceRules] 🔥 组件挂载，准备加载数据库配置');
         
         return () => {
-            // console.log('[AttendanceRules] 🔴 组件卸载');
             isMountedRef.current = false;
+            // console.log('[AttendanceRules] 组件卸载');
         };
     }, []);
 
     // 各模块手风琴展开状态
-    const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['workSchedule', 'attendanceDays', 'workdaySwap', 'remoteWork', 'lateRules', 'flexibility', 'fullAttendance', 'performance', 'overtime', 'crossDay', 'crossWeek', 'crossMonth', 'leaveDisplay']));
+    const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['workSchedule', 'attendanceDays', 'workdaySwap', 'remoteWork', 'lateRules', 'flexibility', 'fullAttendance', 'performance', 'overtime', 'crossDay', 'leaveDisplay']));
 
     // 切换模块展开/收起
     const toggleSection = (section: string) => {
@@ -135,7 +135,7 @@ export const AttendanceRulesPage: React.FC = () => {
         });
     };
 
-    // 🔥 从数据库加载配置 - 使用 useCallback 避免不必要的重新创建
+    // 🔥 从数据库加载配置 - 使用useCallback防止重复调用
     const loadConfigFromDatabase = useCallback(async () => {
         // 🔥 防止重复调用
         if (isCurrentlyLoading) {
@@ -162,20 +162,22 @@ export const AttendanceRulesPage: React.FC = () => {
             
             if (dbConfig) {
                 // console.log(`[AttendanceRules] ✅ 成功从数据库加载 ${selectedCompany} 配置，版本: ${dbConfig.version}`);
-                // console.log(`[AttendanceRules] 🔍 原始数据库配置:`, dbConfig);
                 
                 // 将数据库配置转换为前端格式
                 const frontendConfig = convertDbConfigToFrontend(dbConfig, selectedCompany);
                 
-                // console.log(`[AttendanceRules] 🔥 转换后的前端配置:`, frontendConfig);
-                // console.log(`[AttendanceRules] 🔥 出勤天数规则:`, frontendConfig.attendanceDaysRules);
+                // console.log(`[AttendanceRules] 🔥 转换后的前端配置:`, {
+                    // workStartTime: frontendConfig.workStartTime,
+                    // workEndTime: frontendConfig.workEndTime,
+                    // lateExemptionEnabled: frontendConfig.lateExemptionEnabled,
+                    // performancePenaltyEnabled: frontendConfig.performancePenaltyEnabled,
+                    // fullAttendanceEnabled: frontendConfig.fullAttendanceEnabled
+                // });
                 
                 // 🔥 确保设置到表单数据
                 setFormData({
                     rules: { ...frontendConfig }
                 });
-                
-                // console.log(`[AttendanceRules] ✅ 已设置表单数据`);
                 
                 // 同时更新localStorage作为备份
                 setStoredConfigs(prev => ({
@@ -203,7 +205,7 @@ export const AttendanceRulesPage: React.FC = () => {
                 }
                 
                 // 显示成功消息
-                setStatusMessage({ type: 'success', text: `✅ 已加载 ${selectedCompany === 'eyewind' ? '风眼' : '海多多'} 的配置 (版本 ${dbConfig.version})` });
+                setStatusMessage({ type: 'success', text: `✅ 已从数据库重新加载配置 (版本 ${dbConfig.version}) 并同步到规则引擎` });
                 setTimeout(() => setStatusMessage(null), 3000);
             } else {
                 // console.log(`[AttendanceRules] ⚠️ 数据库中没有 ${selectedCompany} 的配置，使用默认配置`);
@@ -231,11 +233,11 @@ export const AttendanceRulesPage: React.FC = () => {
         if (isMountedRef.current) {
             setHasChanges(false);
         }
-    }, [selectedCompany, isCurrentlyLoading]); // 依赖 selectedCompany 和 isCurrentlyLoading
+    }, [selectedCompany, isCurrentlyLoading, setStoredConfigs]);
 
-    // 🔥 主要初始化 useEffect - 每次进入页面或切换公司都强制从数据库加载规则
+    // 🔥 主要初始化 useEffect - 每次进入页面都强制从数据库加载规则
     useEffect(() => {
-        // console.log(`[AttendanceRules] 🔥 触发数据加载 useEffect，公司: ${selectedCompany}`);
+        // console.log(`[AttendanceRules] 🔥 每次进入页面都强制从数据库加载 ${selectedCompany} 配置`);
         
         // 🔥 重置初始化状态，强制重新加载
         setHasInitialized(false);
@@ -244,40 +246,16 @@ export const AttendanceRulesPage: React.FC = () => {
         // 🔥 立即从数据库加载配置
         loadConfigFromDatabase();
         
-        // 清理函数：组件卸载或公司切换时清理状态
+        // 🔥 清理函数，防止组件卸载后的状态更新
         return () => {
-            // console.log(`[AttendanceRules] 🧹 清理旧的 ${selectedCompany} 状态`);
+            // console.log('[AttendanceRules] 组件卸载，清理状态');
+            isMountedRef.current = false;
         };
-    }, [selectedCompany, loadConfigFromDatabase]); // 🔥 依赖 selectedCompany 和 loadConfigFromDatabase
-
-    // 🔥 调试：监控 formData 变化
-    useEffect(() => {
-        // console.log('[AttendanceRules] 📊 formData 已更新:', {
-            // shouldAttendanceCalcMethod: formData.rules.attendanceDaysRules?.shouldAttendanceCalcMethod,
-            // fixedShouldAttendanceDays: formData.rules.attendanceDaysRules?.fixedShouldAttendanceDays,
-            // workStartTime: formData.rules.workStartTime,
-            // fullAttendanceBonus: formData.rules.fullAttendanceBonus
-        // });
-    }, [formData]);
+    }, [selectedCompany, loadConfigFromDatabase]); // 🔥 每次公司切换或组件挂载都重新加载
 
     // 将数据库配置转换为前端格式
     const convertDbConfigToFrontend = (dbConfig: any, companyKey: string): AttendanceRuleConfig => {
-        // console.log('[convertDbConfigToFrontend] 开始转换，dbConfig:', dbConfig);
-        // console.log('[convertDbConfigToFrontend] dbConfig.rules 存在?', !!dbConfig.rules);
-        
         const defaultConfig = DEFAULT_CONFIGS[companyKey as 'eyewind' | 'hydodo'];
-        
-        // 🔥 新的数据库设计：rules 字段已经是前端格式，直接使用
-        if (dbConfig.rules) {
-            // console.log('[convertDbConfigToFrontend] ✅ 使用新格式：直接返回 rules 对象');
-            // console.log('[convertDbConfigToFrontend] rules.attendanceDaysRules:', dbConfig.rules.attendanceDaysRules);
-            return dbConfig.rules as AttendanceRuleConfig;
-        }
-        
-        // 🔥 兼容旧格式：如果没有 rules 字段，则从扁平字段转换
-        // console.log('[convertDbConfigToFrontend] ⚠️ 使用旧格式：从扁平字段转换');
-        // console.log('[convertDbConfigToFrontend] should_attend_calc:', dbConfig.should_attend_calc);
-        // console.log('[convertDbConfigToFrontend] fixed_should_attendance_days:', dbConfig.fixed_should_attendance_days);
         
         // 转换迟到规则
         const lateRules = (dbConfig.lateRules || []).map((r: any) => ({
@@ -311,9 +289,15 @@ export const AttendanceRulesPage: React.FC = () => {
             longTermLabel: r.label_long || ''
         }));
 
-        // 🔥 转换统一的跨天打卡规则（支持跨天、跨周、跨月）
-        // 注意：新版本不再使用 rules 数组，时间阈值从 lateRules 读取
-        
+        // 转换跨天打卡规则（统一格式）
+        const crossDayRules = (dbConfig.crossDayRules || []).map((r: any) => ({
+            checkoutTime: r.time_start?.replace(':00', '') || '20:30',
+            nextCheckinTime: r.time_end?.replace(':00', '') || '09:30',
+            description: r.description || '',
+            applyTo: r.apply_to || 'day',
+            weekDays: r.week_days || undefined
+        }));
+
         return {
             workStartTime: dbConfig.work_start_time?.substring(0, 5) || defaultConfig.rules!.workStartTime,
             workEndTime: dbConfig.work_end_time?.substring(0, 5) || defaultConfig.rules!.workEndTime,
@@ -397,11 +381,11 @@ export const AttendanceRulesPage: React.FC = () => {
             overtimeCheckpoints: dbConfig.overtime_checkpoints || defaultConfig.rules!.overtimeCheckpoints,
             weekendOvertimeThreshold: dbConfig.weekend_overtime_threshold ?? defaultConfig.rules!.weekendOvertimeThreshold,
 
-            // 🔥 简化的跨天打卡规则（不再包含 rules 数组）
             crossDayCheckout: {
-                enabled: dbConfig.cross_day_enabled ?? defaultConfig.rules!.crossDayCheckout.enabled,
-                enableLookback: dbConfig.cross_day_enable_lookback ?? defaultConfig.rules!.crossDayCheckout.enableLookback,
-                lookbackDays: dbConfig.cross_day_lookback_days ?? defaultConfig.rules!.crossDayCheckout.lookbackDays
+                enabled: dbConfig.cross_day_enabled ?? false,
+                enableLookback: dbConfig.cross_day_enable_lookback ?? true,
+                lookbackDays: dbConfig.cross_day_lookback_days ?? 3,
+                rules: crossDayRules
             }
         };
     };
@@ -621,6 +605,29 @@ export const AttendanceRulesPage: React.FC = () => {
     const removeLeaveDisplayRule = (index: number) => {
         const newRules = formData.rules.leaveDisplayRules.filter((_, i) => i !== index);
         updateRule('leaveDisplayRules', newRules);
+    };
+
+    // Cross-day Checkout Rules Management
+    const addCrossDayRule = () => {
+        const newRule = {
+            checkoutTime: "20:30",
+            nextCheckinTime: "09:30",
+            description: "新跨天规则",
+            applyTo: 'day' as const
+        };
+        const newRules = [...formData.rules.crossDayCheckout.rules, newRule];
+        updateRule('crossDayCheckout', { ...formData.rules.crossDayCheckout, rules: newRules });
+    };
+
+    const updateCrossDayRule = (index: number, field: string, value: any) => {
+        const newRules = [...formData.rules.crossDayCheckout.rules];
+        newRules[index] = { ...newRules[index], [field]: value };
+        updateRule('crossDayCheckout', { ...formData.rules.crossDayCheckout, rules: newRules });
+    };
+
+    const removeCrossDayRule = (index: number) => {
+        const newRules = formData.rules.crossDayCheckout.rules.filter((_, i) => i !== index);
+        updateRule('crossDayCheckout', { ...formData.rules.crossDayCheckout, rules: newRules });
     };
 
     // Performance Penalty Rules Management
@@ -2836,7 +2843,7 @@ ${performanceRulesDesc}`
                             )}
                         </div>
 
-                        {/* Section 7: Cross-day Checkout Rules - Simplified */}
+                        {/* Section 7: Cross-day Checkout Rules */}
                         <div className="border border-teal-200 dark:border-teal-800/50 rounded-lg overflow-hidden">
                             <button
                                 onClick={() => toggleSection('crossDay')}
@@ -2845,106 +2852,152 @@ ${performanceRulesDesc}`
                                 <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
                                     <ClockIcon className="w-5 h-5 text-teal-500" /> 跨天打卡规则
                                     <span className={`text-xs font-normal px-2 py-0.5 rounded-full ${formData.rules.crossDayCheckout.enabled ? 'text-green-600 bg-green-100 dark:bg-green-900/30' : 'text-slate-500 bg-slate-100 dark:bg-slate-700'}`}>
-                                        {formData.rules.crossDayCheckout.enabled ? '已启用' : '已关闭'}
+                                        {formData.rules.crossDayCheckout.enabled ? `${formData.rules.crossDayCheckout.rules.length} 条规则` : '已关闭'}
                                     </span>
                                 </h3>
                                 <ChevronDownIcon className={`w-5 h-5 text-teal-500 transition-transform ${expandedSections.has('crossDay') ? 'rotate-180' : ''}`} />
                             </button>
                             {expandedSections.has('crossDay') && (
                             <div className="p-4 bg-teal-50/50 dark:bg-teal-900/10 space-y-4">
-                                {/* 功能开关 */}
-                                <div className="p-4 bg-teal-100/50 dark:bg-teal-900/20 rounded-lg border border-teal-200 dark:border-teal-800/50">
-                                    <div className="flex items-center justify-between">
-                                        <div>
-                                            <label className="block text-sm font-medium text-teal-800 dark:text-teal-200">启用跨天打卡规则</label>
-                                            <p className="text-xs text-teal-600 dark:text-teal-400 mt-1">
-                                                启用后，系统将根据"迟到规则配置"自动应用跨天/跨周/跨月打卡规则
-                                            </p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => updateRule('crossDayCheckout', { 
-                                                ...formData.rules.crossDayCheckout, 
-                                                enabled: !formData.rules.crossDayCheckout.enabled 
-                                            })}
-                                            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 ${
-                                                formData.rules.crossDayCheckout.enabled ? 'bg-teal-500' : 'bg-slate-300 dark:bg-slate-600'
-                                            }`}
-                                        >
-                                            <span
-                                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                                                    formData.rules.crossDayCheckout.enabled ? 'translate-x-5' : 'translate-x-0'
-                                                }`}
+                                <div className="flex items-center gap-4">
+                                    <label className="block text-sm font-medium text-teal-800 dark:text-teal-200">启用跨天打卡</label>
+                                    <div className="flex items-center gap-3">
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="radio"
+                                                name="crossDayEnabled"
+                                                checked={formData.rules.crossDayCheckout.enabled}
+                                                onChange={() => updateRule('crossDayCheckout', { ...formData.rules.crossDayCheckout, enabled: true })}
+                                                className="text-teal-600"
                                             />
-                                        </button>
+                                            <span className="text-sm">是</span>
+                                        </label>
+                                        <label className="flex items-center gap-2">
+                                            <input
+                                                type="radio"
+                                                name="crossDayEnabled"
+                                                checked={!formData.rules.crossDayCheckout.enabled}
+                                                onChange={() => updateRule('crossDayCheckout', { ...formData.rules.crossDayCheckout, enabled: false })}
+                                                className="text-teal-600"
+                                            />
+                                            <span className="text-sm">否</span>
+                                        </label>
                                     </div>
                                 </div>
 
-                                <div className={`space-y-4 ${!formData.rules.crossDayCheckout.enabled ? 'opacity-50 pointer-events-none' : ''}`}>
-                                    {/* 向前查询配置 */}
-                                    <div className="bg-teal-50 dark:bg-teal-900/20 p-4 rounded-lg border border-teal-100 dark:border-teal-800/50">
-                                        <div className="space-y-4">
-                                            <div className="flex items-center justify-between gap-4">
-                                                <div className="flex-1">
-                                                    <label className="block text-sm font-medium text-teal-800 dark:text-teal-200">启用向前查询</label>
-                                                    <p className="text-xs text-teal-600 dark:text-teal-400 mt-1">
-                                                        如果昨天没有下班打卡，就查询前一天的下班打卡时间，依此类推
-                                                    </p>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => updateRule('crossDayCheckout', { 
-                                                        ...formData.rules.crossDayCheckout, 
-                                                        enableLookback: !formData.rules.crossDayCheckout.enableLookback 
-                                                    })}
-                                                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 ${
-                                                        formData.rules.crossDayCheckout.enableLookback ? 'bg-teal-500' : 'bg-slate-300 dark:bg-slate-600'
-                                                    }`}
-                                                >
-                                                    <span
-                                                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                                                            formData.rules.crossDayCheckout.enableLookback ? 'translate-x-5' : 'translate-x-0'
-                                                        }`}
-                                                    />
-                                                </button>
-                                            </div>
-                                            
-                                            {formData.rules.crossDayCheckout.enableLookback && (
-                                                <div className="space-y-2 pt-2 border-t border-teal-200 dark:border-teal-700">
-                                                    <label className="block text-sm font-medium text-teal-800 dark:text-teal-200">最多向前查询天数</label>
-                                                    <div className="flex items-center gap-2">
-                                                        <input
-                                                            type="number"
-                                                            value={formData.rules.crossDayCheckout.lookbackDays || 10}
-                                                            onChange={e => updateRule('crossDayCheckout', { 
-                                                                ...formData.rules.crossDayCheckout, 
-                                                                lookbackDays: parseInt(e.target.value) || 10 
-                                                            })}
-                                                            className="w-20 px-3 py-2 bg-white dark:bg-slate-800 border border-teal-200 dark:border-teal-800 rounded-lg text-sm text-center"
-                                                            min="1"
-                                                            max="30"
-                                                        />
-                                                        <span className="text-sm text-teal-700 dark:text-teal-300">天</span>
+                                {formData.rules.crossDayCheckout.enabled && (
+                                    <>
+                                        {/* 向前查询配置 */}
+                                        <div className="bg-teal-50 dark:bg-teal-900/20 p-4 rounded-lg border border-teal-100 dark:border-teal-800/50">
+                                            <div className="space-y-4">
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <label className="block text-sm font-medium text-teal-800 dark:text-teal-200">启用向前查询</label>
+                                                        <p className="text-xs text-teal-600 dark:text-teal-400 mt-1">
+                                                            如果昨天没有下班打卡，就查询前一天的下班打卡时间，依此类推
+                                                        </p>
                                                     </div>
-                                                    <p className="text-xs text-teal-600/70 dark:text-teal-400/70">
-                                                        系统将最多向前查询指定天数内的下班打卡记录
-                                                    </p>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => updateRule('crossDayCheckout', { 
+                                                            ...formData.rules.crossDayCheckout, 
+                                                            enableLookback: !formData.rules.crossDayCheckout.enableLookback 
+                                                        })}
+                                                        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 ${
+                                                            formData.rules.crossDayCheckout.enableLookback ? 'bg-teal-500' : 'bg-slate-300 dark:bg-slate-600'
+                                                        }`}
+                                                    >
+                                                        <span
+                                                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                                                formData.rules.crossDayCheckout.enableLookback ? 'translate-x-5' : 'translate-x-0'
+                                                            }`}
+                                                        />
+                                                    </button>
                                                 </div>
-                                            )}
+                                                
+                                                {formData.rules.crossDayCheckout.enableLookback && (
+                                                    <div className="space-y-2 pt-2 border-t border-teal-200 dark:border-teal-700">
+                                                        <label className="block text-sm font-medium text-teal-800 dark:text-teal-200">最多向前查询天数</label>
+                                                        <div className="flex items-center gap-3">
+                                                            <input
+                                                                type="number"
+                                                                value={formData.rules.crossDayCheckout.lookbackDays || 3}
+                                                                onChange={e => updateRule('crossDayCheckout', { 
+                                                                    ...formData.rules.crossDayCheckout, 
+                                                                    lookbackDays: parseInt(e.target.value) || 3 
+                                                                })}
+                                                                className="w-24 px-3 py-2 bg-white dark:bg-slate-800 border border-teal-200 dark:border-teal-800 rounded-lg text-sm text-center"
+                                                                min="1"
+                                                                max="30"
+                                                            />
+                                                            <span className="text-sm text-teal-600 dark:text-teal-400">天</span>
+                                                        </div>
+                                                        <p className="text-xs text-teal-600/70 dark:text-teal-400/70">
+                                                            如果多少天内没有下班打卡数据，就停止遍历
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
-                                    </div>
 
-                                    {/* 说明文字 */}
-                                    <div className="bg-teal-50 dark:bg-teal-900/20 p-4 rounded-lg border border-teal-100 dark:border-teal-800/50">
-                                        <h4 className="text-sm font-semibold text-teal-800 dark:text-teal-200 mb-2">规则说明</h4>
-                                        <ul className="text-xs text-teal-600 dark:text-teal-400 space-y-1 list-disc list-inside">
-                                            <li>跨天打卡规则的时间阈值从"迟到规则配置"中读取</li>
-                                            <li>系统会自动识别跨天、跨周（周一）、跨月（本月第一个工作日）场景</li>
-                                            <li>根据前一时段的下班打卡时间，匹配对应的迟到规则</li>
-                                            <li>例如：前一天20:30打卡，次日9:30前打卡不算迟到</li>
-                                        </ul>
-                                    </div>
-                                </div>
+                                        <div className="space-y-4">
+                                            <h4 className="text-sm font-semibold text-teal-800 dark:text-teal-200">跨天打卡规则</h4>
+                                            {formData.rules.crossDayCheckout.rules.map((rule, index) => (
+                                                <div key={index} className="bg-white dark:bg-slate-800 p-4 rounded-lg border border-teal-200 dark:border-teal-800">
+                                                    <div className="flex justify-between items-start mb-3">
+                                                        <h5 className="text-sm font-semibold text-teal-800 dark:text-teal-200">规则 {index + 1}</h5>
+                                                        <button onClick={() => removeCrossDayRule(index)} className="text-teal-400 hover:text-red-500 transition-colors">
+                                                            <TrashIcon className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                        <div className="space-y-2">
+                                                            <label className="block text-xs font-medium text-teal-700 dark:text-teal-300">前一天打卡时间</label>
+                                                            {rule.checkoutTime === "24:00" ? (
+                                                                <div className="px-3 py-2 bg-teal-100 dark:bg-teal-900 border border-teal-200 dark:border-teal-800 rounded-lg text-sm font-mono text-center">
+                                                                    24:00
+                                                                </div>
+                                                            ) : (
+                                                                <input
+                                                                    type="time"
+                                                                    value={rule.checkoutTime}
+                                                                    onChange={e => updateCrossDayRule(index, 'checkoutTime', e.target.value)}
+                                                                    className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-teal-200 dark:border-teal-800 rounded-lg text-sm font-mono"
+                                                                />
+                                                            )}
+                                                        </div>
+                                                        <div className="space-y-2">
+                                                            <label className="block text-xs font-medium text-teal-700 dark:text-teal-300">次日最晚打卡</label>
+                                                            <input
+                                                                type="time"
+                                                                value={rule.nextCheckinTime}
+                                                                onChange={e => updateCrossDayRule(index, 'nextCheckinTime', e.target.value)}
+                                                                className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-teal-200 dark:border-teal-800 rounded-lg text-sm font-mono"
+                                                            />
+                                                        </div>
+                                                        <div className="space-y-2">
+                                                            <label className="block text-xs font-medium text-teal-700 dark:text-teal-300">规则描述</label>
+                                                            <input
+                                                                type="text"
+                                                                value={rule.description}
+                                                                onChange={e => updateCrossDayRule(index, 'description', e.target.value)}
+                                                                className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-teal-200 dark:border-teal-800 rounded-lg text-sm"
+                                                                placeholder="规则描述"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            <button onClick={addCrossDayRule} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-teal-600 bg-white hover:bg-teal-50 rounded-lg border border-dashed border-teal-300 transition-colors">
+                                                <PlusCircleIcon className="w-4 h-4" /> 添加跨天规则
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+
+                                <p className="text-xs text-teal-600/70 dark:text-teal-400/70">
+                                    启用后，员工在指定时间打卡可享受次日延迟上班的弹性安排。
+                                </p>
                             </div>
                             )}
                         </div>

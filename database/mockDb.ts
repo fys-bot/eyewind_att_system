@@ -1,5 +1,5 @@
 
-import type { User, Role, AttendanceSheet, EmployeeAttendanceRecord, AdminSettings, Project, AuditLog } from './schema.ts';
+import type { User, Role, AttendanceSheet, EmployeeAttendanceRecord, AdminSettings, Project } from './schema.ts';
 
 // --- DEFINED PERMISSIONS ---
 export const ALL_PERMISSIONS = {
@@ -30,28 +30,6 @@ export const ALL_PERMISSIONS = {
 };
 
 // --- MOCK DATA ---
-
-let MOCK_AUDIT_LOGS: AuditLog[] = [
-    {
-        id: 'log_1',
-        userId: 'user_2',
-        userName: 'hr_manager',
-        userRole: '人事经理',
-        action: 'LOGIN',
-        target: '系统',
-        timestamp: Date.now() - 86400000
-    },
-    {
-        id: 'log_2',
-        userId: 'user_4',
-        userName: 'finance_staff',
-        userRole: '财务专员',
-        action: 'DOWNLOAD',
-        target: '2024年06月考勤报表',
-        details: '下载了风眼(Eyewind)公司的考勤报表',
-        timestamp: Date.now() - 43200000
-    }
-];
 
 let MOCK_ROLES: Role[] = [
     { 
@@ -426,18 +404,5 @@ export const db = {
             return MOCK_ATTENDANCE_SHEETS[sheetIndex];
         }
         return null;
-    },
-
-    // Audit Logs
-    getAuditLogs: (): AuditLog[] => {
-        return [...MOCK_AUDIT_LOGS].sort((a, b) => b.timestamp - a.timestamp);
-    },
-    addAuditLog: (log: Omit<AuditLog, 'id' | 'timestamp'>) => {
-        const newLog: AuditLog = {
-            ...log,
-            id: `log_${Date.now()}`,
-            timestamp: Date.now()
-        };
-        MOCK_AUDIT_LOGS.unshift(newLog);
     }
 };

@@ -56,7 +56,9 @@ router.put('/:companyId', async (req: Request, res: Response) => {
       } as ApiResponse);
     }
 
-    const result = await ruleService.updateFullConfig(companyId, req.body, updatedBy);
+    // 新服务接受前端格式的 rules 对象
+    const { rules, changeReason } = req.body;
+    const result = await ruleService.updateFullConfig(companyId, rules, updatedBy, changeReason);
 
     res.json({
       code: 0,
@@ -96,7 +98,9 @@ router.patch('/:companyId', async (req: Request, res: Response) => {
       } as ApiResponse);
     }
 
-    const result = await ruleService.updateFullConfig(companyId, req.body, updatedBy);
+    // 新服务接受前端格式的 rules 对象
+    const { rules, changeReason } = req.body;
+    const result = await ruleService.updateFullConfig(companyId, rules, updatedBy, changeReason);
 
     res.json({
       code: 0,

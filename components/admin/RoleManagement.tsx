@@ -1,23 +1,51 @@
 
 import React, { useState, useEffect } from 'react';
-import { db, ALL_PERMISSIONS } from '../../database/mockDb.ts';
-import type { Role } from '../../database/schema.ts';
 import { PlusIcon, PencilIcon, TrashIcon, CheckIcon } from '../Icons.tsx';
 import { Modal } from '../Modal.tsx';
+import * as roleApi from '../../services/roleApiService.ts';
 
 export const RoleManagement: React.FC = () => {
-    const [roles, setRoles] = useState<Role[]>([]);
+    const [roles, setRoles] = useState<roleApi.Role[]>([]);
+    const [allPermissions, setAllPermissions] = useState<roleApi.PermissionsMap>({});
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
     
     // Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [editingRole, setEditingRole] = useState<Role | null>(null);
+    const [editingRole, setEditingRole] = useState<roleApi.Role | null>(null);
     const [formData, setFormData] = useState<{ name: string; description: string; permissions: string[] }>({ name: '', description: '', permissions: [] });
 
+    // 加载角色列表
+    const loadRoles = async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            const data = await roleApi.getRoles();
+            setRoles(data);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : '加载角色列表失败');
+            console.error('加载角色列表失败:', err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // 加载权限列表
+    const loadPermissions = async () => {
+        try {
+            const data = await roleApi.getPermissions();
+            setAllPermissions(data);
+        } catch (err) {
+            console.error('加载权限列表失败:', err);
+        }
+    };
+
     useEffect(() => {
-        setRoles(db.getRoles());
+        loadRoles();
+        loadPermissions();
     }, []);
 
-    const handleEdit = (role: Role) => {
+    const handleEdit = (role: roleApi.Role) => {
         setEditingRole(role);
         setFormData({ name: role.name, description: role.description, permissions: role.permissions || [] });
         setIsModalOpen(true);
@@ -29,10 +57,14 @@ export const RoleManagement: React.FC = () => {
         setIsModalOpen(true);
     };
 
-    const handleDelete = (id: string) => {
+    const handleDelete = async (roleId: string) => {
         if (confirm('确定要删除此角色吗？关联的用户可能会失去权限。')) {
-            db.deleteRole(id);
-            setRoles(db.getRoles());
+            try {
+                await roleApi.deleteRole(roleId);
+                await loadRoles();
+            } catch (err) {
+                alert(err instanceof Error ? err.message : '删除角色失败');
+            }
         }
     };
 
@@ -49,7 +81,7 @@ export const RoleManagement: React.FC = () => {
     };
 
     const toggleModulePermissions = (moduleName: string, allSelected: boolean) => {
-        const modulePerms = Object.keys(ALL_PERMISSIONS[moduleName as keyof typeof ALL_PERMISSIONS]);
+        const modulePerms = Object.keys(allPermissions[moduleName] || {});
         setFormData(prev => {
             let newPermissions = [...prev.permissions];
             if (allSelected) {
@@ -64,52 +96,68 @@ export const RoleManagement: React.FC = () => {
         });
     };
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!formData.name) {
             alert('角色名称为必填项');
             return;
         }
 
-        if (editingRole) {
-            db.updateRole(editingRole.id, formData);
-        } else {
-            db.addRole(formData);
+        try {
+            if (editingRole) {
+                await roleApi.updateRole(editingRole.role_id, formData);
+            } else {
+                await roleApi.createRole(formData);
+            }
+            await loadRoles();
+            setIsModalOpen(false);
+        } catch (err) {
+            alert(err instanceof Error ? err.message : '保存角色失败');
         }
-        setRoles(db.getRoles());
-        setIsModalOpen(false);
     };
 
     return (
         <div className="space-y-4">
+            {error && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-4 py-3 rounded-lg">
+                    {error}
+                </div>
+            )}
+            
             <div className="flex justify-end items-center">
                 <button onClick={handleCreate} className="flex items-center gap-2 px-4 py-2 bg-sky-600 text-white rounded-lg text-sm font-semibold hover:bg-sky-500 transition-colors shadow-sm">
                     <PlusIcon className="w-4 h-4" /> 新增角色
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {roles.map(role => (
-                    <div key={role.id} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 hover:shadow-md transition-shadow">
-                        <div className="flex justify-between items-start mb-2">
-                            <h3 className="font-bold text-slate-900 dark:text-white text-lg">{role.name}</h3>
-                            <div className="flex gap-1">
-                                <button onClick={() => handleEdit(role)} className="p-1.5 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition-colors">
-                                    <PencilIcon className="w-4 h-4" />
-                                </button>
-                                <button onClick={() => handleDelete(role.id)} className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors">
-                                    <TrashIcon className="w-4 h-4" />
-                                </button>
+            {loading ? (
+                <div className="text-center py-12 text-slate-500 dark:text-slate-400">
+                    加载中...
+                </div>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {roles.map(role => (
+                        <div key={role.role_id} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 hover:shadow-md transition-shadow">
+                            <div className="flex justify-between items-start mb-2">
+                                <h3 className="font-bold text-slate-900 dark:text-white text-lg">{role.name}</h3>
+                                <div className="flex gap-1">
+                                    <button onClick={() => handleEdit(role)} className="p-1.5 text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 transition-colors">
+                                        <PencilIcon className="w-4 h-4" />
+                                    </button>
+                                    <button onClick={() => handleDelete(role.role_id)} className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors">
+                                        <TrashIcon className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            </div>
+                            <p className="text-sm text-slate-500 dark:text-slate-400 mb-4 h-10 line-clamp-2">{role.description}</p>
+                            
+                            <div className="flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg">
+                                <CheckIcon className="w-3 h-3 text-green-500" />
+                                包含 {role.permissions?.length || 0} 项权限
                             </div>
                         </div>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4 h-10 line-clamp-2">{role.description}</p>
-                        
-                        <div className="flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500 bg-slate-50 dark:bg-slate-900/50 p-2 rounded-lg">
-                            <CheckIcon className="w-3 h-3 text-green-500" />
-                            包含 {role.permissions?.length || 0} 项权限
-                        </div>
-                    </div>
-                ))}
-            </div>
+                    ))}
+                </div>
+            )}
 
             <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingRole ? '配置角色权限' : '创建新角色'} size="2xl">
                 <div className="space-y-6">
@@ -139,7 +187,7 @@ export const RoleManagement: React.FC = () => {
                     <div>
                         <h4 className="text-sm font-bold text-slate-900 dark:text-white mb-3 pb-2 border-b border-slate-100 dark:border-slate-700">权限配置</h4>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-6 gap-x-8 max-h-[400px] overflow-y-auto pr-2">
-                            {Object.entries(ALL_PERMISSIONS).map(([moduleName, perms]) => {
+                            {Object.entries(allPermissions).map(([moduleName, perms]) => {
                                 const modulePermKeys = Object.keys(perms);
                                 const selectedCount = modulePermKeys.filter(k => formData.permissions.includes(k)).length;
                                 const isAllSelected = selectedCount === modulePermKeys.length;

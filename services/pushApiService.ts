@@ -31,11 +31,11 @@ export interface PushResponse {
  */
 export async function sendDingTalkMessage(request: DingTalkPushRequest): Promise<PushResponse> {
   try {
-    console.log('[PushApiService] 发送钉钉消息:', {
-      webhookLength: request.webhook.length,
-      contentLength: request.content.length,
-      atUsersCount: request.atUsers?.length || 0
-    });
+    // console.log('[PushApiService] 发送钉钉消息:', {
+      // webhookLength: request.webhook.length,
+      // contentLength: request.content.length,
+      // atUsersCount: request.atUsers?.length || 0
+    // });
 
     const response = await fetch(`${API_BASE_URL}/push/dingtalk`, {
       method: 'POST',
@@ -48,7 +48,7 @@ export async function sendDingTalkMessage(request: DingTalkPushRequest): Promise
     const data = await response.json();
 
     if (response.ok && data.code === 0) {
-      console.log('[PushApiService] 推送成功');
+      // console.log('[PushApiService] 推送成功');
       return {
         success: true,
         message: data.message || '推送成功',

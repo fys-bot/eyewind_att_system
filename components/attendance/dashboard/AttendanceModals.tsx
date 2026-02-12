@@ -5,6 +5,7 @@ import { Modal } from '../../Modal.tsx';
 import { Avatar, ProcessDetailCard } from './AttendanceShared.tsx';
 import { ArrowLeftIcon, XIcon, Loader2Icon, ChevronRightIcon, LinkIcon, FileTextIcon, ChevronUpIcon, ChevronDownIcon, SparklesIcon, RefreshCwIcon, BarChartIcon, PieChartIcon, CalendarIcon, CheckCircleIcon, AlertTriangleIcon, ClockIcon, DollarSignIcon, TrendingUpIcon, UserIcon, NetworkIcon, ShieldCheckIcon } from '../../Icons.tsx';
 import { getLateMinutes, isFullDayLeave, calculateDailyLeaveDuration, checkTimeInLeaveRange } from '../utils.ts';
+import { AttendanceRuleManager } from '../AttendanceRuleEngine.ts';
 import { analyzeAttendanceInsights } from '../../../services/aiChatService.ts';
 import { db } from '../../../database/mockDb.ts';
 import { ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, Legend } from 'recharts';
@@ -711,7 +712,7 @@ export const PunchDetailModal: React.FC<{
     mainCompany?: string;
     processDataMap: Record<string, any>;
     holidays: any;
-}> = ({ detail, onClose, processDataMap, month, holidays }) => {
+}> = ({ detail, onClose, processDataMap, month, holidays, attendanceMap }) => {
 
     const [viewProcessId, setViewProcessId] = useState<string | null>(null);
 
@@ -740,9 +741,214 @@ export const PunchDetailModal: React.FC<{
     // Parse month/year from input 'month' string (YYYY-MM) and 'day'
     const [yearStr, monthStr] = month.split('-');
     const year = parseInt(yearStr);
+    const monthIndex = parseInt(monthStr) - 1;
     const dateKey = `${monthStr}-${String(day).padStart(2, '0')}`;
     const totalDailyLeaveHours = calculateDailyLeaveDuration(status.records, processDataMap, year, dateKey, user.mainCompany);
     const isFullDayLeaveCombined = totalDailyLeaveHours >= 8;
+
+    // 🔥 使用规则引擎重新计算迟到状态
+    const companyKey = (user.mainCompany?.includes('海多多') || user.mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
+    const ruleEngine = AttendanceRuleManager.getEngine(companyKey);
+    
+    // 构建当前日期
+    const dayDate = new Date(year, monthIndex, day);
+    
+    // 🔥 向前查询回调函数：查找前 N 天的下班打卡时间
+    const lookbackCheckoutFinder = (daysBack: number): Date | undefined => {
+        const targetDate = new Date(dayDate);
+        targetDate.setDate(dayDate.getDate() - daysBack);
+        const targetDay = targetDate.getDate();
+        const targetYear = targetDate.getFullYear();
+        const targetMonth = targetDate.getMonth();
+        
+        // 🔥 严格验证：只查找属于目标日期的打卡记录
+        let targetDayAttendance = null;
+        for (const dayKey in attendanceMap[user.userid] || {}) {
+            const dailyData = attendanceMap[user.userid][dayKey];
+            if (dailyData && dailyData.records.length > 0) {
+                const recordWorkDate = dailyData.records[0].workDate;
+                const recordDate = typeof recordWorkDate === 'string' && recordWorkDate.includes('-')
+                    ? new Date(recordWorkDate.split('T')[0].split('-').map(Number).map((n, i) => i === 1 ? n - 1 : n) as any)
+                    : new Date(recordWorkDate);
+                
+                if (recordDate.getFullYear() === targetYear && 
+                    recordDate.getMonth() === targetMonth && 
+                    recordDate.getDate() === targetDay) {
+                    targetDayAttendance = dailyData;
+                    break;
+                }
+            }
+        }
+        
+        if (targetDayAttendance) {
+            const offDutyRecords = targetDayAttendance.records.filter(r => 
+                r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+            );
+            if (offDutyRecords.length > 0) {
+                // 取最晚的下班打卡
+                const latestOffDuty = offDutyRecords.reduce((latest, current) => {
+                    return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                });
+                return new Date(latestOffDuty.userCheckTime);
+            }
+        }
+        
+        return undefined;
+    };
+    
+    // 查找前一天的下班打卡时间
+    let previousDayCheckoutTime: Date | undefined;
+    const yesterday = new Date(dayDate);
+    yesterday.setDate(dayDate.getDate() - 1);
+    const yesterdayAttendance = attendanceMap[user.userid]?.[yesterday.getDate()];
+    if (yesterdayAttendance) {
+        const offDutyRecords = yesterdayAttendance.records.filter(r => 
+            r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+        );
+        if (offDutyRecords.length > 0) {
+            const latestOffDuty = offDutyRecords.reduce((latest, current) => {
+                return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+            });
+            previousDayCheckoutTime = new Date(latestOffDuty.userCheckTime);
+        }
+    }
+    
+    // 查找上周末的下班打卡时间（仅周一需要）
+    let previousWeekendCheckoutTime: Date | undefined;
+    if (dayDate.getDay() === 1) {
+        const { saturday, sunday } = ruleEngine.getPreviousWeekend(dayDate);
+        const friday = new Date(dayDate);
+        friday.setDate(friday.getDate() - 3);
+        
+        // 优先级：周日 > 周六 > 周五
+        const sundayAttendance = attendanceMap[user.userid]?.[sunday.getDate()];
+        if (sundayAttendance) {
+            const sundayOffDuty = sundayAttendance.records.filter(r => 
+                r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+            );
+            if (sundayOffDuty.length > 0) {
+                const latestSundayOffDuty = sundayOffDuty.reduce((latest, current) => {
+                    return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                });
+                previousWeekendCheckoutTime = new Date(latestSundayOffDuty.userCheckTime);
+            }
+        }
+        
+        if (!previousWeekendCheckoutTime) {
+            const saturdayAttendance = attendanceMap[user.userid]?.[saturday.getDate()];
+            if (saturdayAttendance) {
+                const saturdayOffDuty = saturdayAttendance.records.filter(r => 
+                    r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                );
+                if (saturdayOffDuty.length > 0) {
+                    const latestSaturdayOffDuty = saturdayOffDuty.reduce((latest, current) => {
+                        return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                    });
+                    previousWeekendCheckoutTime = new Date(latestSaturdayOffDuty.userCheckTime);
+                }
+            }
+        }
+        
+        if (!previousWeekendCheckoutTime) {
+            const fridayAttendance = attendanceMap[user.userid]?.[friday.getDate()];
+            if (fridayAttendance) {
+                const fridayOffDuty = fridayAttendance.records.filter(r => 
+                    r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                );
+                if (fridayOffDuty.length > 0) {
+                    const latestFridayOffDuty = fridayOffDuty.reduce((latest, current) => {
+                        return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                    });
+                    previousWeekendCheckoutTime = new Date(latestFridayOffDuty.userCheckTime);
+                }
+            }
+        }
+    }
+    
+    // 查找上月最后一个工作日的下班打卡时间（仅本月第一个工作日需要）
+    let previousMonthCheckoutTime: Date | undefined;
+    const isFirstWorkdayOfMonth = (() => {
+        const dayOfWeek = dayDate.getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const holidayInfo = holidays?.[dateKey];
+        
+        let isCurrentDayWorkday = !isWeekend;
+        if (holidayInfo) {
+            if (holidayInfo.holiday === false) isCurrentDayWorkday = true;
+            else if (holidayInfo.holiday === true) isCurrentDayWorkday = false;
+        }
+        
+        if (!isCurrentDayWorkday) return false;
+        
+        for (let d = 1; d < day; d++) {
+            const checkDate = new Date(year, monthIndex, d);
+            const checkDayOfWeek = checkDate.getDay();
+            const checkIsWeekend = checkDayOfWeek === 0 || checkDayOfWeek === 6;
+            const checkDateKey = `${String(monthIndex + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            const checkHolidayInfo = holidays?.[checkDateKey];
+            
+            let checkIsWorkday = !checkIsWeekend;
+            if (checkHolidayInfo) {
+                if (checkHolidayInfo.holiday === false) checkIsWorkday = true;
+                else if (checkHolidayInfo.holiday === true) checkIsWorkday = false;
+            }
+            
+            if (checkIsWorkday) return false;
+        }
+        return true;
+    })();
+    
+    if (isFirstWorkdayOfMonth) {
+        const previousMonth = monthIndex === 0 ? 11 : monthIndex - 1;
+        const previousYear = monthIndex === 0 ? year - 1 : year;
+        
+        let lastMonthCheckouts: Array<{ date: Date; record: any }> = [];
+        
+        if (user.punchData && user.punchData.length > 0) {
+            user.punchData.forEach(record => {
+                const recordDate = new Date(record.workDate);
+                const recordYear = recordDate.getFullYear();
+                const recordMonth = recordDate.getMonth();
+                
+                if (recordYear === previousYear && recordMonth === previousMonth) {
+                    if (record.checkType === 'OffDuty' && record.timeResult !== 'NotSigned') {
+                        lastMonthCheckouts.push({
+                            date: new Date(record.userCheckTime),
+                            record: record
+                        });
+                    }
+                }
+            });
+        }
+        
+        if (lastMonthCheckouts.length > 0) {
+            const latestCheckout = lastMonthCheckouts.reduce((latest, current) => {
+                return current.date > latest.date ? current : latest;
+            });
+            previousMonthCheckoutTime = latestCheckout.date;
+        }
+    }
+    
+    // 🔥 使用规则引擎重新计算每条打卡记录的迟到状态
+    const recalculatedLateStatus = new Map<number, boolean>();
+    sortedRecords.forEach((record, idx) => {
+        if (record.checkType === 'OnDuty' && record.timeResult === 'Late') {
+            const processDetail = record.procInstId ? processDataMap[record.procInstId] : null;
+            const lateMinutes = ruleEngine.calculateLateMinutes(
+                record,
+                dayDate,
+                previousDayCheckoutTime,
+                previousWeekendCheckoutTime,
+                previousMonthCheckoutTime,
+                holidays,
+                processDetail,
+                user.name,
+                lookbackCheckoutFinder
+            );
+            // 如果规则引擎计算结果是0分钟迟到，说明应该显示正常
+            recalculatedLateStatus.set(idx, lateMinutes > 0);
+        }
+    });
 
 
     // Helper: Analyze missing punch time based on Leave process
@@ -836,7 +1042,8 @@ export const PunchDetailModal: React.FC<{
                                     const displayTime = getDisplayTime(record);
                                     // Adjust style if it's treated as Leave instead of Missing or Late
                                     const isLeaveDisplay = displayTime !== '缺卡' && !displayTime.startsWith('缺卡') && !record.userCheckTime;
-                                    const isLate = record.timeResult === 'Late';
+                                    // 🔥 使用规则引擎重新计算的迟到状态
+                                    const isLate = recalculatedLateStatus.has(idx) ? recalculatedLateStatus.get(idx)! : record.timeResult === 'Late';
 
                                     return (
                                         <div key={idx} className="flex justify-between items-center bg-white dark:bg-slate-800 p-3 rounded border border-slate-200 dark:border-slate-700 text-sm shadow-sm">
@@ -860,23 +1067,37 @@ export const PunchDetailModal: React.FC<{
                                                     {record.sourceType_Desc || record.sourceType || ''}
                                                 </span>
                                                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${isLate ? 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-400' :
-                                                    record.timeResult === 'Normal' ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400' :
+                                                    record.timeResult === 'Normal' || (record.timeResult === 'Late' && !isLate) ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400' :
                                                         record.timeResult === 'Early' ? 'bg-yellow-50 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400' :
                                                             record.timeResult === 'NotSigned' ? (isLeaveDisplay ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400' : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400') :
                                                                 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
                                                     }`}>
-                                                    {isLeaveDisplay ? displayTime : (isLate ? '迟到' : (record.timeResult_Desc || record.timeResult || ''))}
+                                                    {isLeaveDisplay ? displayTime : (isLate ? '迟到' : (record.timeResult === 'Late' && !isLate ? '正常' : (record.timeResult_Desc || record.timeResult || '')))}
                                                 </span>
 
-                                                {/* Show Approval Link if exists */}
+                                                {/* 🔥 显示请假类型 */}
                                                 {record.procInstId && processDataMap[record.procInstId] && (
-                                                    <button
-                                                        onClick={() => setViewProcessId(record.procInstId!)}
-                                                        className="flex items-center gap-1 ml-2 text-xs font-semibold text-sky-600 dark:text-sky-400 hover:underline"
-                                                    >
-                                                        <FileTextIcon className="w-3 h-3" />
-                                                        关联审批
-                                                    </button>
+                                                    <>
+                                                        {(() => {
+                                                            const processDetail = processDataMap[record.procInstId!];
+                                                            const leaveType = processDetail?.formValues?.leaveType || processDetail?.bizType;
+                                                            if (leaveType) {
+                                                                return (
+                                                                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800">
+                                                                        {leaveType}
+                                                                    </span>
+                                                                );
+                                                            }
+                                                            return null;
+                                                        })()}
+                                                        <button
+                                                            onClick={() => setViewProcessId(record.procInstId!)}
+                                                            className="flex items-center gap-1 text-xs font-semibold text-sky-600 dark:text-sky-400 hover:underline"
+                                                        >
+                                                            <FileTextIcon className="w-3 h-3" />
+                                                            关联审批
+                                                        </button>
+                                                    </>
                                                 )}
                                             </div>
                                         </div>

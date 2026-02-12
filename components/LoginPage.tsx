@@ -1,14 +1,10 @@
 
 import React, { useState } from 'react';
-// Fix: Add .tsx extension to the import path.
 import { AttendanceLogoIcon } from './Icons.tsx';
-// Fix: Add .ts extension to the import path.
-import { db } from '../database/mockDb.ts';
-// Fix: Import User type for better prop typing.
 import type { User } from '../database/schema.ts';
+import * as userApi from '../services/userApiService.ts';
 
 interface LoginPageProps {
-  // Fix: Changed prop to accept the full User object for better state management in the parent component.
   onLogin: (user: User) => void;
 }
 
@@ -16,27 +12,39 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const user = db.authenticate(username.trim(), password);
-    if (user) {
-      // Log Login Event
-      db.addAuditLog({
-          userId: user.id,
-          userName: user.name,
-          userRole: user.roleName || 'Unknown',
-          action: 'LOGIN',
-          target: '系统',
-          details: '用户登录成功'
-      });
-
-      // Fix: Pass the entire user object on successful login instead of just the name.
-      onLogin(user);
+    
+    try {
+      setLoading(true);
       setError('');
-    } else {
-      setError('用户名或密码错误');
+      
+      const response = await userApi.login({
+        username: username.trim(),
+        password: password
+      });
+      
+      // 转换后端返回的数据为前端 User 类型
+      const user: User = {
+        id: response.user_id,
+        name: response.name,
+        email: response.email,
+        roleId: response.roleId,
+        roleName: response.roleName,
+        permissions: response.permissions,
+        status: response.status as 'active' | 'inactive',
+        lastLogin: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      };
+      
+      onLogin(user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '用户名或密码错误');
       setPassword('');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -81,9 +89,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
           <button
             type="submit"
             className="w-full bg-sky-600 text-white font-bold py-2 px-4 rounded-md hover:bg-sky-500 transition-colors duration-200 disabled:bg-slate-400 dark:disabled:bg-slate-600"
-            disabled={!username.trim() || !password.trim()}
+            disabled={!username.trim() || !password.trim() || loading}
           >
-            登录
+            {loading ? '登录中...' : '登录'}
           </button>
         </form>
       </div>

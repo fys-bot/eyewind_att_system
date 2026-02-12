@@ -194,6 +194,54 @@ export class AttendanceStatusService {
       };
     }
   }
+
+  /**
+   * 获取所有考勤记录
+   */
+  async getAllRecords(): Promise<any[]> {
+    try {
+      return await attendanceDb('attendance');
+    } catch (error) {
+      console.error('获取所有考勤记录失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 根据用户ID和月份获取考勤记录
+   */
+  async getRecordsByUserAndMonth(userid: string, attd_month: string): Promise<any[]> {
+    try {
+      return await attendanceDb('attendance').where({ userid, attd_month });
+    } catch (error) {
+      console.error('根据用户ID和月份获取考勤记录失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 根据月份获取考勤记录
+   */
+  async getRecordsByMonth(attd_month: string): Promise<any[]> {
+    try {
+      return await attendanceDb('attendance').where('attd_month', attd_month);
+    } catch (error) {
+      console.error('根据月份获取考勤记录失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 根据用户ID获取考勤记录
+   */
+  async getRecordsByUser(userid: string): Promise<any[]> {
+    try {
+      return await attendanceDb('attendance').where('userid', userid);
+    } catch (error) {
+      console.error('根据用户ID获取考勤记录失败:', error);
+      return [];
+    }
+  }
 }
 
 export const attendanceStatusService = new AttendanceStatusService();

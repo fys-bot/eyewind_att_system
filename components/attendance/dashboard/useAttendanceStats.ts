@@ -53,12 +53,12 @@ function getShouldAttendanceDays(companyKey: string, workdaysCount: number, holi
     const config = getRuleConfigSync(companyKey);
     const rules = config.rules?.attendanceDaysRules;
     
-    console.log(`[getShouldAttendanceDays] ${companyKey} 配置:`, {
-        method: rules?.shouldAttendanceCalcMethod,
-        fixedDays: rules?.fixedShouldAttendanceDays,
-        workdaysCount,
-        holidaysCount
-    });
+    // console.log(`[getShouldAttendanceDays] ${companyKey} 配置:`, {
+    //     method: rules?.shouldAttendanceCalcMethod,
+    //     fixedDays: rules?.fixedShouldAttendanceDays,
+    //     workdaysCount,
+    //     holidaysCount
+    // });
     
     if (!rules?.enabled) {
         return workdaysCount;
@@ -69,7 +69,7 @@ function getShouldAttendanceDays(companyKey: string, workdaysCount: number, holi
         case 'fixed':
             // 使用固定天数，如果没有设置则使用22天作为默认值
             const fixedDays = rules.fixedShouldAttendanceDays ?? 22;
-            console.log(`[getShouldAttendanceDays] 使用固定天数: ${fixedDays}`);
+            // console.log(`[getShouldAttendanceDays] 使用固定天数: ${fixedDays}`);
             return fixedDays;
         case 'custom':
             // 自定义逻辑（暂时使用计算值）
@@ -124,6 +124,16 @@ interface DailyTrendMap {
 
 
 // --- Helper Functions ---
+
+// 解析 workDate，避免时区问题和类型错误
+const parseWorkDate = (workDateValue: any): Date => {
+    if (typeof workDateValue === 'string' && workDateValue.includes('-')) {
+        const [y, m, d] = workDateValue.split('T')[0].split('-').map(Number);
+        return new Date(y, m - 1, d); // 月份从0开始
+    } else {
+        return new Date(workDateValue);
+    }
+};
 
 const isFullDayLeave = (processData: any, mainCompany): boolean => {
     if (!processData || !processData.formValues) return false;
@@ -319,7 +329,8 @@ export const useAttendanceStats = (
     processDataMap: Record<string, any>,
     holidays: HolidayMap,
     year?: number,
-    month?: number
+    month?: number,
+    ruleUpdateTrigger?: number // 🔥 新增：规则更新触发器
 ) => {
     return useMemo(() => {
 
@@ -378,10 +389,21 @@ export const useAttendanceStats = (
             if (userAttendance) {
                 // Fix: Iterate using entries to get the day even if records are missing, though usually attendanceMap has entries
                 Object.values(userAttendance).forEach((daily: DailyAttendanceStatus) => {
-                    const workDate = new Date(daily.records[0]?.workDate || 0);
+                    // 🔥 修复：从 workDate 字符串中解析日期，避免时区问题
+                    // workDate 格式通常是时间戳（number）或 "YYYY-MM-DD" 字符串
+                    if (daily.records.length === 0 || !daily.records[0]?.workDate) return;
                     
-                    // Fallback if records are empty is tricky, assuming data integrity or we rely on what's present
-                    if (daily.records.length === 0) return;
+                    const workDateValue: any = daily.records[0].workDate;
+                    
+                    // 如果是 ISO 字符串格式 "YYYY-MM-DD"，手动解析避免 UTC 转换
+                    let workDate: Date;
+                    if (typeof workDateValue === 'string' && workDateValue.includes('-')) {
+                        const [y, m, d] = workDateValue.split('T')[0].split('-').map(Number);
+                        workDate = new Date(y, m - 1, d); // 月份从0开始
+                    } else {
+                        // 时间戳或其他格式
+                        workDate = new Date(workDateValue);
+                    }
 
                     const day = workDate.getDate();
                     const year = workDate.getFullYear();
@@ -389,21 +411,7 @@ export const useAttendanceStats = (
                     
                     // 🔥 严格验证：只处理属于当前查询月份的数据
                     if (year !== currentYear || month !== currentMonth) {
-                        console.log(`[FILTER] useAttendanceStats 过滤掉不属于${currentYear}-${(currentMonth + 1).toString().padStart(2, '0')}的数据:`, {
-                            recordDate: `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
-                            currentMonth: `${currentYear}-${(currentMonth + 1).toString().padStart(2, '0')}`,
-                            reason: `记录属于${year}-${(month + 1).toString().padStart(2, '0')}，不属于查询月份`
-                        });
                         return; // 跳过这条记录
-                    }
-                    
-                    // 🔥 添加调试信息，确认31号数据的正确性
-                    if (day === 31) {
-                        console.log(`[DEBUG] useAttendanceStats 确认31号数据属于${currentYear}-${(currentMonth + 1).toString().padStart(2, '0')}:`, {
-                            originalWorkDate: daily.records[0]?.workDate,
-                            parsedDate: `${year}-${(month + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`,
-                            recordsCount: daily.records.length
-                        });
                     }
 
                     const isToday = year === currentYear && month === currentMonth && day === currentDay;
@@ -428,6 +436,7 @@ export const useAttendanceStats = (
                     }
                     let hasFullDayLeave = false;
                     const processedProcInstIds = new Set();
+                    let hasProcessedLate = false; // 🔥 新增：标记是否已处理过迟到（每天只计算一次）
 
                     // Calculate total daily leave duration to handle split leaves
                     const totalDailyLeaveHours = calculateDailyLeaveDuration(daily.records, processDataMap, year, dateKey, user.mainCompany);
@@ -492,54 +501,309 @@ export const useAttendanceStats = (
                             }
                         }
 
-                        let yesterdayApprove2030 = false;
-                        const yesterday = new Date(workDate);
-                        yesterday.setDate(workDate.getDate() - 1);
-                        const yesterdayAttendance = userAttendance[String(yesterday.getDate())];
-                        if (yesterdayAttendance) {
-                            const approveOffDuty = yesterdayAttendance.records.find(r => r.checkType === 'OffDuty' && r.sourceType === 'APPROVE');
-                            if (approveOffDuty) {
-                                const offTime = new Date(approveOffDuty.userCheckTime);
-                                offTime.setHours(20, 30, 0, 0);
-                                if (new Date(approveOffDuty.userCheckTime).getTime() >= offTime.getTime()) yesterdayApprove2030 = true;
-                            }
-                        }
-
-                        const isFirstDayOnJob = new Date(user.hired_date as number).toDateString() === workDate.toDateString();
-
-                        const findLastOffDuty = (currentDate: Date): Date | null => {
-                            for (let d = currentDate.getDate() - 1; d >= 1; d--) {
-                                const attendance = userAttendance[String(d)];
-                                if (attendance) {
-                                    const offRecord = attendance.records.find(r => r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned');
-                                    if (offRecord) return new Date(offRecord.userCheckTime);
+                        // 🔥 使用规则引擎计算迟到分钟数（支持跨天/跨周/跨月规则）
+                        // 🔥 修复：每天只计算一次迟到，避免重复计算（一天可能有多条上班打卡记录）
+                        if (record.checkType === 'OnDuty' && record.timeResult === 'Late' && !hasProcessedLate) {
+                            hasProcessedLate = true; // 🔥 标记已处理，后续的迟到记录不再重复计算
+                            
+                            // 🔥 向前查询回调函数：查找前 N 天的下班打卡时间
+                            const lookbackCheckoutFinder = (daysBack: number): Date | undefined => {
+                                const targetDate = new Date(workDate);
+                                targetDate.setDate(targetDate.getDate() - daysBack);
+                                const targetDay = targetDate.getDate();
+                                const targetYear = targetDate.getFullYear();
+                                const targetMonth = targetDate.getMonth();
+                                
+                                // 🔥 严格验证：只查找属于目标日期的打卡记录
+                                let targetDayAttendance = null;
+                                for (const [dayKey, dailyData] of Object.entries(userAttendance)) {
+                                    if (dailyData.records.length > 0) {
+                                        const recordWorkDate = dailyData.records[0].workDate;
+                                        const recordDate = parseWorkDate(recordWorkDate);
+                                        
+                                        if (recordDate.getFullYear() === targetYear && 
+                                            recordDate.getMonth() === targetMonth && 
+                                            recordDate.getDate() === targetDay) {
+                                            targetDayAttendance = dailyData;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                if (targetDayAttendance) {
+                                    const offDutyRecords = targetDayAttendance.records.filter(r => 
+                                        r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                    );
+                                    if (offDutyRecords.length > 0) {
+                                        // 取最晚的下班打卡
+                                        const latestOffDuty = offDutyRecords.reduce((latest, current) => {
+                                            return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                        });
+                                        return new Date(latestOffDuty.userCheckTime);
+                                    }
+                                }
+                                
+                                return undefined;
+                            };
+                            
+                            // 查找前一天的下班打卡时间（用于跨天规则）
+                            let previousDayCheckoutTime: Date | undefined;
+                            const previousDay = new Date(workDate);
+                            previousDay.setDate(previousDay.getDate() - 1);
+                            const previousDayAttendance = userAttendance[String(previousDay.getDate())];
+                            if (previousDayAttendance) {
+                                const offDutyRecords = previousDayAttendance.records.filter(r => 
+                                    r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                );
+                                if (offDutyRecords.length > 0) {
+                                    // 取最晚的下班打卡
+                                    const latestOffDuty = offDutyRecords.reduce((latest, current) => {
+                                        return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                    });
+                                    previousDayCheckoutTime = new Date(latestOffDuty.userCheckTime);
                                 }
                             }
-                            return null;
-                        };
-
-                        const minutes = getLateMinutes(record, processDetail, findLastOffDuty(workDate), yesterdayApprove2030, isFirstDayOnJob, holidays);
-                        if (record.timeResult === 'Late' && minutes > 0) {
-                            stats.late++;
-                            stats.lateMinutes += minutes;
-                            dailyTrendMapByCompany[company][day].late++;
-
-                            // 🔥 使用规则引擎计算豁免
-                            const currentRecordDate = new Date(year, month, day);
-                            const dayOfWeek = currentRecordDate.getDay();
-                            const isWorkday = dayOfWeek >= 1 && dayOfWeek <= 5; // 仅工作日参与豁免
-
-                            const exemptionResult = ruleEngine.calculateExemptedLateMinutes(
-                                minutes,
-                                stats.monthlyExemptionUsed || 0,
-                                isWorkday
-                            );
-
-                            stats.exemptedLateMinutes = (stats.exemptedLateMinutes || 0) + exemptionResult.exemptedMinutes;
-                            stats.monthlyExemptionUsed = exemptionResult.exemptionUsed;
                             
-                            // Fix: Cast to any to bypass missing property in schema, as we cannot edit schema file.
-                            (stats as any).exemptedLate = ((stats as any).exemptedLate || 0) + 1;
+                            // 🔥 查找上周末或周五的下班打卡时间（用于跨周规则，仅周一需要）
+                            let previousWeekendCheckoutTime: Date | undefined;
+                            const currentDayOfWeek = workDate.getDay(); // 0=周日, 1=周一, ..., 6=周六
+                            
+                            if (currentDayOfWeek === 1) { // 周一
+                                const { saturday, sunday } = ruleEngine.getPreviousWeekend(workDate);
+                                
+                                // 🔥 修复：使用年月日直接构造周五日期，避免时区问题
+                                const mondayYear = workDate.getFullYear();
+                                const mondayMonth = workDate.getMonth();
+                                const mondayDay = workDate.getDate();
+                                
+                                // 计算周五的日期（周一 - 3天）
+                                const friday = new Date(mondayYear, mondayMonth, mondayDay - 3);
+                                
+                                // 🔥 跨周规则：按照优先级查找 周日 > 周六 > 周五
+                                const sundayDay = sunday.getDate();
+                                const sundayYear = sunday.getFullYear();
+                                const sundayMonth = sunday.getMonth();
+                                
+                                // 遍历所有数据查找匹配的周日，不受月份限制
+                                let sundayAttendance = null;
+                                for (const [dayKey, dailyData] of Object.entries(userAttendance)) {
+                                    if (dailyData.records.length > 0) {
+                                        const recordWorkDate = dailyData.records[0].workDate;
+                                        const recordDate = parseWorkDate(recordWorkDate);
+                                        
+                                        if (recordDate.getFullYear() === sundayYear && 
+                                            recordDate.getMonth() === sundayMonth && 
+                                            recordDate.getDate() === sundayDay) {
+                                            sundayAttendance = dailyData;
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                if (sundayAttendance) {
+                                    const sundayOffDuty = sundayAttendance.records.filter(r => 
+                                        r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                    );
+                                    if (sundayOffDuty.length > 0) {
+                                        const latestSundayOffDuty = sundayOffDuty.reduce((latest, current) => {
+                                            return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                        });
+                                        previousWeekendCheckoutTime = new Date(latestSundayOffDuty.userCheckTime);
+                                    }
+                                }
+                                
+                                // 如果周日没有打卡，查找周六
+                                if (!previousWeekendCheckoutTime) {
+                                    const saturdayDay = saturday.getDate();
+                                    const saturdayYear = saturday.getFullYear();
+                                    const saturdayMonth = saturday.getMonth();
+                                    
+                                    let saturdayAttendance = null;
+                                    for (const [dayKey, dailyData] of Object.entries(userAttendance)) {
+                                        if (dailyData.records.length > 0) {
+                                            const recordWorkDate = dailyData.records[0].workDate;
+                                            const recordDate = parseWorkDate(recordWorkDate);
+                                            
+                                            if (recordDate.getFullYear() === saturdayYear && 
+                                                recordDate.getMonth() === saturdayMonth && 
+                                                recordDate.getDate() === saturdayDay) {
+                                                saturdayAttendance = dailyData;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (saturdayAttendance) {
+                                        const saturdayOffDuty = saturdayAttendance.records.filter(r => 
+                                            r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                        );
+                                        if (saturdayOffDuty.length > 0) {
+                                            const latestSaturdayOffDuty = saturdayOffDuty.reduce((latest, current) => {
+                                                return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                            });
+                                            previousWeekendCheckoutTime = new Date(latestSaturdayOffDuty.userCheckTime);
+                                        }
+                                    }
+                                }
+                                
+                                // 如果周末都没有打卡，查找周五
+                                if (!previousWeekendCheckoutTime) {
+                                    const fridayDay = friday.getDate();
+                                    const fridayYear = friday.getFullYear();
+                                    const fridayMonth = friday.getMonth();
+                                    
+                                    let fridayAttendance = null;
+                                    for (const [dayKey, dailyData] of Object.entries(userAttendance)) {
+                                        if (dailyData.records.length > 0) {
+                                            const recordWorkDate = dailyData.records[0].workDate;
+                                            const recordDate = parseWorkDate(recordWorkDate);
+                                            
+                                            if (recordDate.getFullYear() === fridayYear && 
+                                                recordDate.getMonth() === fridayMonth && 
+                                                recordDate.getDate() === fridayDay) {
+                                                fridayAttendance = dailyData;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (fridayAttendance) {
+                                        const fridayOffDuty = fridayAttendance.records.filter(r => 
+                                            r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                        );
+                                        
+                                        if (fridayOffDuty.length > 0) {
+                                            const latestFridayOffDuty = fridayOffDuty.reduce((latest, current) => {
+                                                return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                            });
+                                            previousWeekendCheckoutTime = new Date(latestFridayOffDuty.userCheckTime);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // 🔥 查找上月最后一个工作日的下班打卡时间（用于跨月规则）
+                            let previousMonthCheckoutTime: Date | undefined;
+                            
+                            // 🔥 判断当前日期是否是本月第一个工作日（使用规则引擎的方法）
+                            // 注意：不能简单使用 day === 1，因为1号可能是周末或节假日
+                            const isFirstWorkdayOfMonth = (() => {
+                                // 首先检查当前日期是否是工作日
+                                if (!isWorkDay) return false;
+                                
+                                // 🔥 调试：记录2月1-3日的判断过程
+                                if (month === 1 && day <= 3) {
+                                    console.log(`[跨月规则调试] ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}, 星期${workDate.getDay()}, isWorkDay=${isWorkDay}, 用户: ${user.name}`);
+                                }
+                                
+                                // 检查当前日期之前是否有工作日
+                                for (let d = 1; d < day; d++) {
+                                    const checkDate = new Date(year, month, d);
+                                    const checkDayOfWeek = checkDate.getDay();
+                                    const checkIsWeekend = checkDayOfWeek === 0 || checkDayOfWeek === 6;
+                                    const checkDateKey = `${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                                    const checkHolidayInfo = holidays?.[checkDateKey];
+                                    
+                                    let checkIsWorkday = !checkIsWeekend;
+                                    if (checkHolidayInfo) {
+                                        if (checkHolidayInfo.holiday === false) checkIsWorkday = true;
+                                        else if (checkHolidayInfo.holiday === true) checkIsWorkday = false;
+                                    }
+                                    
+                                    if (checkIsWorkday) return false; // 找到了更早的工作日
+                                }
+                                
+                                // 🔥 调试：记录判断结果
+                                if (month === 1 && day <= 3) {
+                                    console.log(`[跨月规则调试] ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')} 是本月第一个工作日！`);
+                                }
+                                
+                                return true; // 当前日期是本月第一个工作日
+                            })();
+                            
+                            if (isFirstWorkdayOfMonth) {
+                                // console.log(`[跨月规则] 检测到本月第一个工作日: ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}, 用户: ${user.name}`);
+                                
+                                // 🔥 从用户的所有打卡记录中找上个月的最后一条下班打卡
+                                let lastMonthCheckouts: Array<{ date: Date; record: PunchRecord }> = [];
+                                
+                                const previousMonth = month === 0 ? 11 : month - 1;
+                                const previousYear = month === 0 ? year - 1 : year;
+                                
+                                // console.log(`[跨月规则] ${user.name} - punchData总记录数: ${user.punchData?.length || 0}, 查找上月: ${previousYear}-${String(previousMonth+1).padStart(2,'0')}`);
+                                
+                                // 遍历用户的所有打卡记录
+                                if (user.punchData && user.punchData.length > 0) {
+                                    user.punchData.forEach(record => {
+                                        const recordDate = parseWorkDate(record.workDate);
+                                        const recordYear = recordDate.getFullYear();
+                                        const recordMonth = recordDate.getMonth();
+                                        
+                                        // 只看上个月的下班打卡
+                                        if (recordYear === previousYear && recordMonth === previousMonth) {
+                                            if (record.checkType === 'OffDuty' && record.timeResult !== 'NotSigned') {
+                                                lastMonthCheckouts.push({
+                                                    date: new Date(record.userCheckTime),
+                                                    record: record
+                                                });
+                                            }
+                                        }
+                                    });
+                                }
+                                
+                                // console.log(`[跨月规则] ${user.name} - 上月下班打卡总数: ${lastMonthCheckouts.length}`);
+                                
+                                // 如果找到了上个月的下班打卡，取最晚的一条
+                                if (lastMonthCheckouts.length > 0) {
+                                    const latestCheckout = lastMonthCheckouts.reduce((latest, current) => {
+                                        return current.date > latest.date ? current : latest;
+                                    });
+                                    
+                                    previousMonthCheckoutTime = latestCheckout.date;
+                                    // console.log(`[跨月规则] ${user.name} - 找到上月最后下班打卡: ${previousMonthCheckoutTime.toISOString()}`);
+                                } else {
+                                    // 🔥 如果上个月没有任何下班打卡记录，默认使用18:30
+                                    const lastDayOfPreviousMonth = new Date(year, month, 0).getDate();
+                                    previousMonthCheckoutTime = new Date(previousYear, previousMonth, lastDayOfPreviousMonth, 18, 30, 0);
+                                    // console.log(`[跨月规则] ${user.name} - 上月无下班打卡记录，使用默认18:30`);
+                                }
+                            }
+                            
+                            // 🔥 使用规则引擎计算迟到分钟数（传入 holidayMap 用于判断工作日）
+                            const minutes = ruleEngine.calculateLateMinutes(
+                                record,
+                                workDate,
+                                previousDayCheckoutTime,
+                                previousWeekendCheckoutTime,
+                                previousMonthCheckoutTime,
+                                holidays, // 🔥 传入节假日映射
+                                processDetail, // 🔥 新增：传入请假/调休审批详情
+                                user.name, // 🔥 传入员工名字用于日志
+                                lookbackCheckoutFinder // 🔥 传入向前查询回调函数
+                            );
+                            
+                            if (minutes > 0) {
+                                stats.late++;
+                                stats.lateMinutes += minutes;
+                                dailyTrendMapByCompany[company][day].late++;
+
+                                // 🔥 使用规则引擎计算豁免
+                                const currentRecordDate = new Date(year, month, day);
+                                const dayOfWeek = currentRecordDate.getDay();
+                                const isWorkday = dayOfWeek >= 1 && dayOfWeek <= 5; // 仅工作日参与豁免
+
+                                const exemptionResult = ruleEngine.calculateExemptedLateMinutes(
+                                    minutes,
+                                    stats.monthlyExemptionUsed || 0,
+                                    isWorkday
+                                );
+
+                                stats.exemptedLateMinutes = (stats.exemptedLateMinutes || 0) + exemptionResult.exemptedMinutes;
+                                stats.monthlyExemptionUsed = exemptionResult.exemptionUsed;
+                                
+                                // Fix: Cast to any to bypass missing property in schema, as we cannot edit schema file.
+                                (stats as any).exemptedLate = ((stats as any).exemptedLate || 0) + 1;
+                            }
                         }
                     });
 
@@ -820,5 +1084,5 @@ export const useAttendanceStats = (
             dailyTrend
         };
 
-    }, [allUsers, attendanceMap, processDataMap, holidays]);
+    }, [allUsers, attendanceMap, processDataMap, holidays, ruleUpdateTrigger]);
 };

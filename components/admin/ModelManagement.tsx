@@ -373,12 +373,12 @@ export const ModelManagement: React.FC = () => {
         // 检查缓存的Token是否有效
         if (isTokenValid()) {
             const cachedToken = localStorage.getItem('authToken')!;
-            console.log('[ModelManagement] 使用缓存的Token');
+            // console.log('[ModelManagement] 使用缓存的Token');
             setAuthToken(cachedToken);
             return cachedToken;
         }
 
-        console.log('[ModelManagement] Token已过期或不存在，重新获取');
+        // console.log('[ModelManagement] Token已过期或不存在，重新获取');
         
         try {
             const credentials = getLoginCredentials();
@@ -409,7 +409,7 @@ export const ModelManagement: React.FC = () => {
                 // 缓存 token 和时间戳
                 localStorage.setItem('authToken', token);
                 localStorage.setItem('authTokenTime', Date.now().toString());
-                console.log('[ModelManagement] Token已更新并缓存');
+                // console.log('[ModelManagement] Token已更新并缓存');
             }
 
             return token;
@@ -425,18 +425,18 @@ export const ModelManagement: React.FC = () => {
         const now = Date.now();
         if (globalLoadingState.configs.size > 0 && 
             (now - globalLoadingState.lastLoadTime) < CONFIG_CACHE_TIME) {
-            console.log('[ModelManagement] 使用缓存的配置数据');
+            // console.log('[ModelManagement] 使用缓存的配置数据');
             return globalLoadingState.configs;
         }
 
         // 如果正在加载，返回现有的Promise
         if (globalLoadingState.isLoading && globalLoadingState.loadPromise) {
-            console.log('[ModelManagement] 正在加载中，等待现有请求完成');
+            // console.log('[ModelManagement] 正在加载中，等待现有请求完成');
             return globalLoadingState.loadPromise;
         }
 
         // 开始新的加载
-        console.log('[ModelManagement] 开始新的加载请求');
+        // console.log('[ModelManagement] 开始新的加载请求');
         globalLoadingState.isLoading = true;
         
         const loadPromise = (async () => {
@@ -445,12 +445,12 @@ export const ModelManagement: React.FC = () => {
                 
                 // 先获取 token（带缓存）
                 const token = await fetchAuthToken();
-                console.log('[ModelManagement] 开始加载所有模块配置');
+                // console.log('[ModelManagement] 开始加载所有模块配置');
 
                 // 并发加载所有模块配置
                 const loadPromises = AI_MODULES.map(async (module) => {
                     try {
-                        console.log(`[ModelManagement] 加载模块配置: ${module.name}`);
+                        // console.log(`[ModelManagement] 加载模块配置: ${module.name}`);
                         const response = await fetch(`${API_BASE_URL}/admin/chatgpt/model/query`, {
                             method: 'POST',
                             headers: {
@@ -505,7 +505,7 @@ export const ModelManagement: React.FC = () => {
                 globalLoadingState.configs = newConfigs;
                 globalLoadingState.lastLoadTime = Date.now();
                 
-                console.log('[ModelManagement] 所有模块配置加载完成');
+                // console.log('[ModelManagement] 所有模块配置加载完成');
                 return newConfigs;
             } catch (err) {
                 console.error('Failed to load model configs:', err);
@@ -553,7 +553,7 @@ export const ModelManagement: React.FC = () => {
         // 清理函数
         return () => {
             isCancelled = true;
-            console.log('[ModelManagement] useEffect cleanup - 取消加载');
+            // console.log('[ModelManagement] useEffect cleanup - 取消加载');
         };
     }, []);
 
@@ -570,7 +570,7 @@ export const ModelManagement: React.FC = () => {
         try {
             // 使用缓存的token，避免重复获取
             const token = await fetchAuthToken();
-            console.log(`[ModelManagement] 更新模块 ${module.name} 的模型配置`);
+            // console.log(`[ModelManagement] 更新模块 ${module.name} 的模型配置`);
 
             const config: ModelConfig = {
                 name: user.name,
@@ -611,7 +611,7 @@ export const ModelManagement: React.FC = () => {
             setModelConfigs(prev => new Map(prev).set(moduleId, config));
             setSuccessMessage(`${module.name} 的模型配置已更新`);
             setTimeout(() => setSuccessMessage(null), 3000);
-            console.log(`[ModelManagement] 模块 ${module.name} 配置更新成功`);
+            // console.log(`[ModelManagement] 模块 ${module.name} 配置更新成功`);
         } catch (err) {
             console.error(`Failed to update config for ${module?.name}:`, err);
             setError(`保存失败: ${err instanceof Error ? err.message : '未知错误'}`);

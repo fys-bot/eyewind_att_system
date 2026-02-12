@@ -10,7 +10,7 @@ export const useAttendanceRuleSync = (onRulesUpdated?: (companyKey: string) => v
     const handleRulesUpdate = useCallback(async (event: CustomEvent) => {
         const { companyKey } = event.detail;
         
-        console.log(`[useAttendanceRuleSync] 收到规则更新事件: ${companyKey}`);
+        // console.log(`[useAttendanceRuleSync] 收到规则更新事件: ${companyKey}`);
 
         // 🔥 刷新规则配置缓存（从数据库重新加载）
         // 注意：这里不需要调用refreshRuleConfigCache，因为useAttendanceRuleConfig已经监听了同样的事件
@@ -24,7 +24,7 @@ export const useAttendanceRuleSync = (onRulesUpdated?: (companyKey: string) => v
             onRulesUpdated(companyKey);
         }
         
-        console.log(`[useAttendanceRuleSync] 规则同步完成: ${companyKey}`);
+        // console.log(`[useAttendanceRuleSync] 规则同步完成: ${companyKey}`);
     }, [onRulesUpdated]);
 
     useEffect(() => {

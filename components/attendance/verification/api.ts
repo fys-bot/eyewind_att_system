@@ -16,21 +16,21 @@ export async function fetchToken(mainCompany: string) {
     
     // 如果有缓存且未过期，直接返回
     if (cached && (Date.now() - cached.timestamp) < TOKEN_CACHE_DURATION) {
-        console.log(`[fetchToken] 使用缓存token: ${mainCompany}`);
+        // console.log(`[fetchToken] 使用缓存token: ${mainCompany}`);
         return cached.data;
     }
     
     // 如果正在请求中，返回同一个 Promise
     if (cached?.promise) {
-        console.log(`[fetchToken] 等待进行中的token请求: ${mainCompany}`);
+        // console.log(`[fetchToken] 等待进行中的token请求: ${mainCompany}`);
         return cached.promise;
     }
 
     // 创建新的请求 Promise
     const requestPromise = (async () => {
         try {
-            console.log(`[fetchToken] 开始获取token: ${mainCompany}`);
-            const response = await fetch("https://sg.api.eyewind.cn/etl/dingding/gettoken", {
+            // console.log(`[fetchToken] 开始获取token: ${mainCompany}`);
+            const response = await fetch("http://localhost:5001/etl/dingding/gettoken", {
                 "method": "POST",
                 "headers": {
                     "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJ6ZDAyOWY3Y2VzcnQiLCJ0eXAiOiJhZG1pbiIsImlhdCI6MTc2MDk0MjU0MiwiZXhwIjoxNzYwOTQ5NzQyfQ.GmxvDMsuQ-l6k55tHnLlLBomYuNA4bV2o2z-hwLVaX8",
@@ -46,7 +46,7 @@ export async function fetchToken(mainCompany: string) {
             
             // 🔥 缓存token结果
             tokenCache.set(cacheKey, { data: result, timestamp: Date.now() });
-            console.log(`[fetchToken] 成功获取并缓存token: ${mainCompany}`);
+            // console.log(`[fetchToken] 成功获取并缓存token: ${mainCompany}`);
             return result;
         } catch (error) {
             console.error(`[fetchToken] 获取token失败: ${mainCompany}`, error);
@@ -98,20 +98,20 @@ export async function fetchAllEmployees(mainCompany: string): Promise<any[]> {
     
     // 如果有缓存且未过期，直接返回
     if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
-        console.log(`[fetchAllEmployees] 使用缓存数据: ${mainCompany}`);
+        // console.log(`[fetchAllEmployees] 使用缓存数据: ${mainCompany}`);
         return cached.data;
     }
     
     // 如果正在请求中，返回同一个 Promise
     if (cached?.promise) {
-        console.log(`[fetchAllEmployees] 等待进行中的请求: ${mainCompany}`);
+        // console.log(`[fetchAllEmployees] 等待进行中的请求: ${mainCompany}`);
         return cached.promise;
     }
 
     // 创建新的请求 Promise
     const requestPromise = (async () => {
         try {
-            console.log(`[fetchAllEmployees] 开始获取员工数据: ${mainCompany}`);
+            // console.log(`[fetchAllEmployees] 开始获取员工数据: ${mainCompany}`);
             const tokenResponse = await fetchToken(mainCompany).catch(() => null);
             const { access_token } = tokenResponse?.data || {};
 
@@ -150,7 +150,7 @@ export async function fetchAllEmployees(mainCompany: string): Promise<any[]> {
             
             // 🔥 缓存真实数据
             employeeCache.set(cacheKey, { data: employees, timestamp: Date.now() });
-            console.log(`[fetchAllEmployees] 成功获取并缓存员工数据: ${mainCompany}, 数量: ${employees.length}`);
+            // console.log(`[fetchAllEmployees] 成功获取并缓存员工数据: ${mainCompany}, 数量: ${employees.length}`);
             return employees;
         } catch (error) {
             console.error(`[${new Date().toLocaleString()}] 获取钉钉员工失败！使用模拟数据`, error);
@@ -341,7 +341,7 @@ export async function sendDingTalkNotifications(records: EmployeeAttendanceRecor
                 }
             }
         };
-        const corpMessagePromise = fetch("https://sg.api.eyewind.cn/etl/dingding/corp/send", {
+        const corpMessagePromise = fetch("http://localhost:5001/etl/dingding/corp/send", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(corpMessagePayload)
@@ -396,7 +396,7 @@ export async function sendDingTalkNotifications(records: EmployeeAttendanceRecor
             remindNotifyConfigs: { dingNotify: "1", sendTodoApn: true }
         };
 
-        const todoPromise = fetch("https://sg.api.eyewind.cn/etl/dingding/tudo/create", {
+        const todoPromise = fetch("http://localhost:5001/etl/dingding/tudo/create", {
             method: 'POST',
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(todoPayload)
@@ -465,7 +465,7 @@ export async function recallDingTalkNotifications(
                 operatorId: user.unionid // Defaulting operator to same user as per requirement
             };
             promises.push(
-                fetch("https://sg.api.eyewind.cn/etl/dingding/tudo/delete", {
+                fetch("http://localhost:5001/etl/dingding/tudo/delete", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(todoRecallPayload)
@@ -488,7 +488,7 @@ export async function recallDingTalkNotifications(
                 msg_task_id: record.corp_task_id
             };
             promises.push(
-                fetch("https://sg.api.eyewind.cn/etl/dingding/corp/recall", {
+                fetch("http://localhost:5001/etl/dingding/corp/recall", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(corpRecallPayload)

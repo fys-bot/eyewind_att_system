@@ -104,35 +104,58 @@ export const getCachedAnalysis = async (key: string): Promise<string | null> => 
   try {
     const db = await initDB();
     
+    // 检查数据库连接是否有效
+    if (!db || db.objectStoreNames.length === 0) {
+      console.warn('Database connection is invalid, reinitializing...');
+      dbInstance = null;
+      const newDb = await initDB();
+      if (!newDb) return null;
+    }
+    
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORE_NAME], 'readonly');
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(key);
+      try {
+        const transaction = db.transaction([STORE_NAME], 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.get(key);
 
-      request.onerror = () => {
-        console.error('Failed to get cached analysis:', request.error);
+        request.onerror = () => {
+          console.error('Failed to get cached analysis:', request.error);
+          resolve(null);
+        };
+
+        request.onsuccess = () => {
+          const result = request.result as CachedAnalysis | undefined;
+          
+          if (!result) {
+            resolve(null);
+            return;
+          }
+
+          // 检查是否过期
+          const now = Date.now();
+          if (now - result.timestamp > CACHE_EXPIRY_MS) {
+            // 缓存已过期，删除并返回 null
+            deleteCachedAnalysis(key).catch(console.error);
+            resolve(null);
+            return;
+          }
+
+          resolve(result.content);
+        };
+
+        transaction.onerror = () => {
+          console.error('Transaction error:', transaction.error);
+          resolve(null);
+        };
+
+        transaction.onabort = () => {
+          console.error('Transaction aborted');
+          resolve(null);
+        };
+      } catch (error) {
+        console.error('Error creating transaction:', error);
         resolve(null);
-      };
-
-      request.onsuccess = () => {
-        const result = request.result as CachedAnalysis | undefined;
-        
-        if (!result) {
-          resolve(null);
-          return;
-        }
-
-        // 检查是否过期
-        const now = Date.now();
-        if (now - result.timestamp > CACHE_EXPIRY_MS) {
-          // 缓存已过期，删除并返回 null
-          deleteCachedAnalysis(key).catch(console.error);
-          resolve(null);
-          return;
-        }
-
-        resolve(result.content);
-      };
+      }
     });
   } catch (error) {
     console.error('Error getting cached analysis:', error);
@@ -154,27 +177,50 @@ export const setCachedAnalysis = async (
   try {
     const db = await initDB();
     
+    // 检查数据库连接是否有效
+    if (!db || db.objectStoreNames.length === 0) {
+      console.warn('Database connection is invalid, reinitializing...');
+      dbInstance = null;
+      const newDb = await initDB();
+      if (!newDb) return;
+    }
+    
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORE_NAME], 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
-      
-      const data: CachedAnalysis = {
-        key,
-        content,
-        timestamp: Date.now(),
-        type
-      };
+      try {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        
+        const data: CachedAnalysis = {
+          key,
+          content,
+          timestamp: Date.now(),
+          type
+        };
 
-      const request = store.put(data);
+        const request = store.put(data);
 
-      request.onerror = () => {
-        console.error('Failed to cache analysis:', request.error);
-        reject(request.error);
-      };
+        request.onerror = () => {
+          console.error('Failed to cache analysis:', request.error);
+          reject(request.error);
+        };
 
-      request.onsuccess = () => {
-        resolve();
-      };
+        request.onsuccess = () => {
+          resolve();
+        };
+
+        transaction.onerror = () => {
+          console.error('Transaction error:', transaction.error);
+          reject(transaction.error);
+        };
+
+        transaction.onabort = () => {
+          console.error('Transaction aborted');
+          reject(new Error('Transaction aborted'));
+        };
+      } catch (error) {
+        console.error('Error creating transaction:', error);
+        reject(error);
+      }
     });
   } catch (error) {
     console.error('Error caching analysis:', error);
@@ -189,19 +235,40 @@ export const deleteCachedAnalysis = async (key: string): Promise<void> => {
   try {
     const db = await initDB();
     
+    // 检查数据库连接是否有效
+    if (!db || db.objectStoreNames.length === 0) {
+      console.warn('Database connection is invalid, skipping delete');
+      return;
+    }
+    
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction([STORE_NAME], 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.delete(key);
+      try {
+        const transaction = db.transaction([STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.delete(key);
 
-      request.onerror = () => {
-        console.error('Failed to delete cached analysis:', request.error);
-        reject(request.error);
-      };
+        request.onerror = () => {
+          console.error('Failed to delete cached analysis:', request.error);
+          reject(request.error);
+        };
 
-      request.onsuccess = () => {
-        resolve();
-      };
+        request.onsuccess = () => {
+          resolve();
+        };
+
+        transaction.onerror = () => {
+          console.error('Transaction error:', transaction.error);
+          resolve(); // 即使失败也resolve，避免阻塞
+        };
+
+        transaction.onabort = () => {
+          console.error('Transaction aborted');
+          resolve(); // 即使失败也resolve，避免阻塞
+        };
+      } catch (error) {
+        console.error('Error creating transaction:', error);
+        resolve(); // 即使失败也resolve，避免阻塞
+      }
     });
   } catch (error) {
     console.error('Error deleting cached analysis:', error);

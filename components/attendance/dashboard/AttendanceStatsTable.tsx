@@ -33,9 +33,10 @@ const getOvertimeCellClass = (value: number | undefined, color: string) => {
 };
 
 export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ employees, onRowClick, companyName, lateExemptionEnabled = true, fullAttendanceEnabled = true, performancePenaltyEnabled = true }) => {
-    // 辅助函数：获取迟到分钟数（根据豁免开关）
+    // 🔥 修复：统一使用累计迟到分钟数（lateMinutes），与考勤日历保持一致
+    // 不再根据豁免开关切换显示值，始终显示累计迟到
     const getLateMinutesValue = (stats: EmployeeStats) => {
-        return lateExemptionEnabled ? (stats.exemptedLateMinutes || 0) : (stats.lateMinutes || 0);
+        return stats.lateMinutes || 0;
     };
     
     // 优化排序逻辑：当查看全体员工时应用特殊排序
@@ -170,7 +171,8 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                             // 使用纯色背景以确保 sticky 列不透明
                             const stickyBgClass = 'bg-white dark:bg-slate-900';
                             
-                            const lateMinutesValue = lateExemptionEnabled ? stats.exemptedLateMinutes : stats.lateMinutes;
+                            // 🔥 修复：风险判定始终使用累计迟到分钟数（lateMinutes），与考勤日历保持一致
+                            const lateMinutesValue = stats.lateMinutes || 0;
                             const isRisk = lateMinutesValue > 30 || (stats as any).absenteeism >= 1 || stats.missing > 3;
                             
                             const trStyle = isRisk ? "bg-red-50/30 dark:bg-red-900/10" : "hover:bg-slate-50/50 dark:hover:bg-slate-700/70";

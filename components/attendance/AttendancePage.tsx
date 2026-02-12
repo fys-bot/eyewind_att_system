@@ -94,14 +94,14 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
 
     // 🔥 优化的数据加载函数 - 利用缓存避免重复调用
     const loadData = useCallback(async (forceRefreshData = false) => {
-        console.log('[AttendancePage] 开始加载数据, forceRefresh:', forceRefreshData || forceRefresh);
+        // console.log('[AttendancePage] 开始加载数据, forceRefresh:', forceRefreshData || forceRefresh);
         setIsLoading(true);
         setSheetsError(null);
 
         try {
             // 🔥 如果是强制刷新，清除相关缓存
             if (forceRefreshData || forceRefresh) {
-                console.log('[AttendancePage] 强制刷新，清除所有相关缓存');
+                // console.log('[AttendancePage] 强制刷新，清除所有相关缓存');
                 const cacheKey = `ATTENDANCE_SHEETS_${currentCompany}_${globalMonth || 'current'}`;
                 await SmartCache.remove(cacheKey);
                 await SmartCache.remove('ATTENDANCE_SHEETS_RAW');
@@ -114,13 +114,13 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             
             // 🔥 添加缓存逻辑（只有在非强制刷新时才使用缓存）
             const cacheKey = `ATTENDANCE_SHEETS_${currentCompany}_${globalMonth || 'current'}`;
-            console.log('[AttendancePage] 检查缓存:', cacheKey);
+            // console.log('[AttendancePage] 检查缓存:', cacheKey);
             
             // 先尝试从缓存获取数据（只有在非强制刷新时）
             if (!forceRefreshData && !forceRefresh) {
                 const cachedSheets = await SmartCache.get<AttendanceSheet[]>(cacheKey);
                 if (cachedSheets && cachedSheets.length > 0) {
-                    console.log('[AttendancePage] 使用缓存数据，数量:', cachedSheets.length);
+                    // console.log('[AttendancePage] 使用缓存数据，数量:', cachedSheets.length);
                     setSheets(cachedSheets);
                     setSheetsError(null);
                     
@@ -132,7 +132,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 }
             }
 
-            console.log('[AttendancePage] 缓存未命中或强制刷新，从API加载数据');
+            // console.log('[AttendancePage] 缓存未命中或强制刷新，从API加载数据');
 
             // 1. 检查员工数据缓存，如果有缓存就跳过员工数据加载
             const employeeCacheKey = `employees_${currentCompany}`;
@@ -142,11 +142,11 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             
             let employees;
             if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
-                console.log('[AttendancePage] 使用缓存的员工数据，跳过Token和Employee API调用');
+                // console.log('[AttendancePage] 使用缓存的员工数据，跳过Token和Employee API调用');
                 employees = cached.data;
                 setIsDingTalkDataLoading(false);
             } else {
-                console.log('[AttendancePage] 缓存过期或不存在，加载员工数据');
+                // console.log('[AttendancePage] 缓存过期或不存在，加载员工数据');
                 setIsDingTalkDataLoading(true);
                 employees = await fetchAllEmployees(currentCompany);
                 setIsDingTalkDataLoading(false);
@@ -155,12 +155,12 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             setDingTalkUsers(employees as DingTalkUser[]);
 
             // 2. 直接加载考勤数据 - 🔥 加上公司主体参数
-            console.log('[AttendancePage] 开始加载考勤数据，月份:', globalMonth, '公司:', currentCompany);
+            // console.log('[AttendancePage] 开始加载考勤数据，月份:', globalMonth, '公司:', currentCompany);
             const loadUrl = globalMonth 
                 ? `/api/v1/attendance/status/load/${globalMonth}?company=${currentCompany}`
                 : `/api/v1/attendance/status/load?company=${currentCompany}`;
             
-            console.log('[AttendancePage] 请求URL:', loadUrl);
+            // console.log('[AttendancePage] 请求URL:', loadUrl);
             
             const response = await fetch(loadUrl, {
                 method: 'GET',
@@ -171,12 +171,12 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 }
             });
             
-            console.log('[AttendancePage] load接口响应状态:', response.status, response.ok);
+            // console.log('[AttendancePage] load接口响应状态:', response.status, response.ok);
             
             // 🔥 优化404处理：提供更友好的错误信息和操作指引
             if (response.status === 404) {
                 const errorData = await response.json();
-                console.log('[AttendancePage] 404响应:', errorData);
+                // console.log('[AttendancePage] 404响应:', errorData);
                 const monthText = globalMonth ? globalMonth.replace('-', '年') + '月' : '当前月份';
                 setSheetsError(`${monthText}还未配置考勤确认信息，请移步考勤仪表盘设置并确认`);
                 setSheets([]);
@@ -188,11 +188,11 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             }
             
             const apiResponse = await response.json();
-            console.log('[AttendancePage] API响应:', apiResponse);
+            // console.log('[AttendancePage] API响应:', apiResponse);
             
             // 🔥 简化处理：success为false直接显示错误
             if (!apiResponse.success) {
-                console.log('[AttendancePage] API返回success=false:', apiResponse);
+                // console.log('[AttendancePage] API返回success=false:', apiResponse);
                 const monthText = globalMonth ? globalMonth.replace('-', '年') + '月' : '当前月份';
                 setSheetsError(`${monthText}还未配置考勤确认信息，请移步考勤仪表盘设置并确认`);
                 setSheets([]);
@@ -201,7 +201,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             
             // 🔥 直接使用接口返回的数据数组
             if (!apiResponse.data || !Array.isArray(apiResponse.data) || apiResponse.data.length === 0) {
-                console.log('[AttendancePage] API返回无数据或数据为空');
+                // console.log('[AttendancePage] API返回无数据或数据为空');
                 const monthText = globalMonth ? globalMonth.replace('-', '年') + '月' : '当前月份';
                 setSheetsError(`${monthText}还未配置考勤确认信息，请移步考勤仪表盘设置并确认`);
                 setSheets([]);
@@ -209,10 +209,10 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             }
             
             // 🔥 处理API返回的records数组，按月份分组并转换为AttendanceSheet结构
-            console.log('[AttendancePage] 接口返回数据:', apiResponse.data);
-            console.log('[AttendancePage] 数据类型:', typeof apiResponse.data, '是否为数组:', Array.isArray(apiResponse.data));
-            console.log('[AttendancePage] 记录数量:', apiResponse.data.length);
-            console.log('[AttendancePage] 当前公司:', currentCompany);
+            // console.log('[AttendancePage] 接口返回数据:', apiResponse.data);
+            // console.log('[AttendancePage] 数据类型:', typeof apiResponse.data, '是否为数组:', Array.isArray(apiResponse.data));
+            // console.log('[AttendancePage] 记录数量:', apiResponse.data.length);
+            // console.log('[AttendancePage] 当前公司:', currentCompany);
             
             // API返回的是records数组，每个record有attd_month字段
             const records = apiResponse.data;
@@ -221,12 +221,12 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             const filteredRecords = records.filter((record: any) => {
                 const matches = !record.mainCompany || record.mainCompany === currentCompany;
                 if (!matches) {
-                    console.log(`[AttendancePage] 过滤掉记录: userid=${record.userid}, mainCompany=${record.mainCompany}, 当前公司=${currentCompany}`);
+                    // console.log(`[AttendancePage] 过滤掉记录: userid=${record.userid}, mainCompany=${record.mainCompany}, 当前公司=${currentCompany}`);
                 }
                 return matches;
             });
             
-            console.log(`[AttendancePage] 过滤后记录数量: ${filteredRecords.length}`);
+            // console.log(`[AttendancePage] 过滤后记录数量: ${filteredRecords.length}`);
             
             // 按月份分组
             const monthlyGroups = filteredRecords.reduce((groups: Record<string, any[]>, record: any) => {
@@ -238,11 +238,11 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 return groups;
             }, {});
             
-            console.log('[AttendancePage] 按月份分组结果:', Object.keys(monthlyGroups));
+            // console.log('[AttendancePage] 按月份分组结果:', Object.keys(monthlyGroups));
             
             // 为每个月份创建AttendanceSheet
             const sheets: AttendanceSheet[] = Object.entries(monthlyGroups).map(([month, monthRecords]: [string, any[]]) => {
-                console.log(`[AttendancePage] 处理月份 ${month}, 记录数量: ${monthRecords.length}`);
+                // console.log(`[AttendancePage] 处理月份 ${month}, 记录数量: ${monthRecords.length}`);
                 
                 // 🔥 添加去重逻辑：按员工姓名去重，优先保留数据更完整的记录
                 const uniqueRecords = monthRecords.reduce((acc: any[], record: any) => {
@@ -264,40 +264,40 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                         const existingScore = calculateRecordCompleteness(existing);
                         
                         if (currentScore > existingScore) {
-                            console.log(`[AttendancePage] 发现重复员工 ${employeeName}，替换为更完整的记录 (${currentScore} > ${existingScore})`);
+                            // console.log(`[AttendancePage] 发现重复员工 ${employeeName}，替换为更完整的记录 (${currentScore} > ${existingScore})`);
                             acc[existingIndex] = record;
                         } else {
-                            console.log(`[AttendancePage] 发现重复员工 ${employeeName}，保留现有记录 (${existingScore} >= ${currentScore})`);
+                            // console.log(`[AttendancePage] 发现重复员工 ${employeeName}，保留现有记录 (${existingScore} >= ${currentScore})`);
                         }
                     }
                     
                     return acc;
                 }, []);
                 
-                console.log(`[AttendancePage] 去重前记录数量: ${monthRecords.length}, 去重后: ${uniqueRecords.length}`);
+                // console.log(`[AttendancePage] 去重前记录数量: ${monthRecords.length}, 去重后: ${uniqueRecords.length}`);
                 
                 // 转换为EmployeeAttendanceRecord格式
                 const employeeRecords: EmployeeAttendanceRecord[] = uniqueRecords.map((record: any) => {
                     // 🔥 添加调试信息，显示原始记录的字段
                     if (monthRecords.indexOf(record) === 0) {
-                        console.log(`[AttendancePage] 第一条记录的字段:`, {
-                            allKeys: Object.keys(record),
-                            userid: record.userid,
-                            username: record.username,
-                            employeeName: record.employeeName,
-                            department: record.department,
-                            dept: record.dept,
-                            dept_name: record.dept_name,
-                            department_name: record.department_name,
-                            deptName: record.deptName,
-                            departmentName: record.departmentName,
-                            is_send: record.is_send,
-                            is_view: record.is_view,
-                            is_confirm: record.is_confirm,
-                            mainCompany: record.mainCompany,
-                            records: record.records,
-                            dailyData: record.dailyData
-                        });
+                        // console.log(`[AttendancePage] 第一条记录的字段:`, {
+                            // allKeys: Object.keys(record),
+                            // userid: record.userid,
+                            // username: record.username,
+                            // employeeName: record.employeeName,
+                            // department: record.department,
+                            // dept: record.dept,
+                            // dept_name: record.dept_name,
+                            // department_name: record.department_name,
+                            // deptName: record.deptName,
+                            // departmentName: record.departmentName,
+                            // is_send: record.is_send,
+                            // is_view: record.is_view,
+                            // is_confirm: record.is_confirm,
+                            // mainCompany: record.mainCompany,
+                            // records: record.records,
+                            // dailyData: record.dailyData
+                        // });
                     }
                     
                     // 🔥 首先尝试从考勤记录中获取部门信息
@@ -321,29 +321,29 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                             
                             // 记录从员工数据获取部门信息的情况
                             if (monthRecords.indexOf(record) === 0) {
-                                console.log(`[AttendancePage] 从员工数据获取部门信息:`, {
-                                    employeeId,
-                                    employeeName,
-                                    matchedBy: matchedEmployee.userid === employeeId ? 'userid' : 'name',
-                                    departmentFromEmployee: matchedEmployee.department
-                                });
+                                // console.log(`[AttendancePage] 从员工数据获取部门信息:`, {
+                                    // employeeId,
+                                    // employeeName,
+                                    // matchedBy: matchedEmployee.userid === employeeId ? 'userid' : 'name',
+                                    // departmentFromEmployee: matchedEmployee.department
+                                // });
                             }
                         }
                     }
                     
                     // 🔥 调试部门字段映射
                     if (monthRecords.indexOf(record) === 0) {
-                        console.log(`[AttendancePage] 部门字段映射调试:`, {
-                            'record.department': record.department,
-                            'record.dept': record.dept,
-                            'record.dept_name': record.dept_name,
-                            'record.department_name': record.department_name,
-                            'record.deptName': record.deptName,
-                            'record.departmentName': record.departmentName,
-                            'record.部门': record.部门,
-                            'finalDepartmentValue': departmentValue,
-                            'departmentSource': departmentValue && !record.department ? 'employee_data' : 'attendance_record'
-                        });
+                        // console.log(`[AttendancePage] 部门字段映射调试:`, {
+                            // 'record.department': record.department,
+                            // 'record.dept': record.dept,
+                            // 'record.dept_name': record.dept_name,
+                            // 'record.department_name': record.department_name,
+                            // 'record.deptName': record.deptName,
+                            // 'record.departmentName': record.departmentName,
+                            // 'record.部门': record.部门,
+                            // 'finalDepartmentValue': departmentValue,
+                            // 'departmentSource': departmentValue && !record.department ? 'employee_data' : 'attendance_record'
+                        // });
                     }
                     
                     // 🔥 获取真实的 dailyData，优先使用接口返回的数据
@@ -381,9 +381,9 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                     // 🔥 记录真实数据的使用情况
                     const hasRealDailyData = Object.keys(dailyData).some(key => /^\d+$/.test(key));
                     if (hasRealDailyData) {
-                        console.log(`[AttendancePage] 员工 ${record.username} 使用真实考勤数据，日期字段数量: ${Object.keys(dailyData).filter(key => /^\d+$/.test(key)).length}`);
+                        // console.log(`[AttendancePage] 员工 ${record.username} 使用真实考勤数据，日期字段数量: ${Object.keys(dailyData).filter(key => /^\d+$/.test(key)).length}`);
                     } else {
-                        console.log(`[AttendancePage] 员工 ${record.username} 缺少日期考勤数据`);
+                        // console.log(`[AttendancePage] 员工 ${record.username} 缺少日期考勤数据`);
                     }
                     
                     return {
@@ -406,7 +406,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                     } as EmployeeAttendanceRecord;
                 });
                 
-                console.log(`[AttendancePage] 月份 ${month} 转换后employeeRecords数量: ${employeeRecords.length}`);
+                // console.log(`[AttendancePage] 月份 ${month} 转换后employeeRecords数量: ${employeeRecords.length}`);
                 
                 // 🔥 生成完整的显示列配置，包括日期列和汇总字段
                 const [yearStr, monthStr] = month.split('-');
@@ -444,8 +444,8 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 // 合并所有显示列
                 const allShowColumns = [...dateColumns, ...summaryColumns];
                 
-                console.log(`[AttendancePage] 生成显示列配置: ${daysInMonth}个日期列 + ${summaryColumns.length}个汇总列 = ${allShowColumns.length}列`);
-                console.log(`[AttendancePage] ${monthStr}月工作日统计: 总天数${daysInMonth}天，工作日${workDays}天`);
+                // console.log(`[AttendancePage] 生成显示列配置: ${daysInMonth}个日期列 + ${summaryColumns.length}个汇总列 = ${allShowColumns.length}列`);
+                // console.log(`[AttendancePage] ${monthStr}月工作日统计: 总天数${daysInMonth}天，工作日${workDays}天`);
                 
                 // 🔥 生成自动确认时间：当天18:30
                 const getTodayAt1830 = () => {
@@ -482,13 +482,13 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 return sheet;
             });
             
-            console.log('[AttendancePage] 转换后的sheets数量:', sheets.length);
-            console.log('[AttendancePage] 第一个sheet的employeeRecords数量:', sheets[0]?.employeeRecords?.length);
+            // console.log('[AttendancePage] 转换后的sheets数量:', sheets.length);
+            // console.log('[AttendancePage] 第一个sheet的employeeRecords数量:', sheets[0]?.employeeRecords?.length);
             
             // 🔥 缓存转换后的数据
             if (sheets.length > 0) {
                 await SmartCache.set(cacheKey, sheets);
-                console.log('[AttendancePage] 数据已缓存到:', cacheKey);
+                // console.log('[AttendancePage] 数据已缓存到:', cacheKey);
             }
             
             // 直接设置转换后的数据
@@ -497,13 +497,13 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             
             // 🔥 有数据时直接跳转到详情页面显示考勤确认单
             if (sheets.length > 0) {
-                console.log('[AttendancePage] 转换后有数据，直接跳转到详情页面');
+                // console.log('[AttendancePage] 转换后有数据，直接跳转到详情页面');
                 // 优先选择当前月份的sheet，如果没有则选择第一个
                 const targetSheet = sheets.find(s => s.month === globalMonth) || sheets[0];
                 setSelectedSheetId(targetSheet.id);
                 setView('detail');
             } else {
-                console.log('[AttendancePage] 转换后无数据，显示空状态');
+                // console.log('[AttendancePage] 转换后无数据，显示空状态');
                 // 如果转换后没有数据，显示相应的错误信息
                 const monthText = globalMonth ? globalMonth.replace('-', '年') + '月' : '当前月份';
                 setSheetsError(`${monthText}没有找到公司 ${currentCompany} 的考勤确认信息`);
@@ -514,19 +514,19 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             setSheetsError(error instanceof Error ? error.message : '加载失败');
             setSheets([]);
         } finally {
-            console.log('[AttendancePage] 加载完成，设置loading为false');
+            // console.log('[AttendancePage] 加载完成，设置loading为false');
             setIsLoading(false);
             setIsDingTalkDataLoading(false);
         }
     }, [currentCompany, preloadedData, globalMonth, forceRefresh]); // 🔥 添加 forceRefresh 依赖
     
     useEffect(() => {
-        console.log('[AttendancePage] useEffect执行，hasInitialized:', hasInitializedRef.current, 'globalMonth:', globalMonth);
+        // console.log('[AttendancePage] useEffect执行，hasInitialized:', hasInitializedRef.current, 'globalMonth:', globalMonth);
         
         // 🔥 简化：防重复调用逻辑
         if (!hasInitializedRef.current) {
             hasInitializedRef.current = true;
-            console.log('[AttendancePage] 组件首次挂载，开始加载数据');
+            // console.log('[AttendancePage] 组件首次挂载，开始加载数据');
             loadData().catch(error => {
                 console.error('[AttendancePage] loadData执行失败:', error);
             });
@@ -535,17 +535,17 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
     
     // 🔥 简化：当globalMonth变化时重新加载数据
     useEffect(() => {
-        console.log('[AttendancePage] globalMonth useEffect执行:', {
-            hasInitialized: hasInitializedRef.current,
-            globalMonth,
-            prevGlobalMonth: prevGlobalMonthRef.current
-        });
+        // console.log('[AttendancePage] globalMonth useEffect执行:', {
+            // hasInitialized: hasInitializedRef.current,
+            // globalMonth,
+            // prevGlobalMonth: prevGlobalMonthRef.current
+        // });
         
         // 🔥 彻底简化：只有在已经初始化过且globalMonth确实变化时才重新加载
         const hasGlobalMonthChanged = prevGlobalMonthRef.current !== globalMonth;
         
         if (hasInitializedRef.current && globalMonth && hasGlobalMonthChanged) {
-            console.log('[AttendancePage] globalMonth变化，重新加载数据:', prevGlobalMonthRef.current, '->', globalMonth);
+            // console.log('[AttendancePage] globalMonth变化，重新加载数据:', prevGlobalMonthRef.current, '->', globalMonth);
             // 🔥 重置初始化状态，允许重新加载
             hasInitializedRef.current = false;
             SmartCache.remove(`ATTENDANCE_SHEETS_RAW`);
@@ -561,17 +561,17 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
     // 🔥 新增：当currentCompany变化时重新加载数据
     const prevCurrentCompanyRef = useRef<string>(currentCompany);
     useEffect(() => {
-        console.log('[AttendancePage] currentCompany useEffect执行:', {
-            hasInitialized: hasInitializedRef.current,
-            currentCompany,
-            prevCurrentCompany: prevCurrentCompanyRef.current
-        });
+        // console.log('[AttendancePage] currentCompany useEffect执行:', {
+            // hasInitialized: hasInitializedRef.current,
+            // currentCompany,
+            // prevCurrentCompany: prevCurrentCompanyRef.current
+        // });
         
         // 🔥 只有在已经初始化过且currentCompany确实变化时才重新加载
         const hasCurrentCompanyChanged = prevCurrentCompanyRef.current !== currentCompany;
         
         if (hasInitializedRef.current && currentCompany && hasCurrentCompanyChanged) {
-            console.log('[AttendancePage] currentCompany变化，重新加载数据:', prevCurrentCompanyRef.current, '->', currentCompany);
+            // console.log('[AttendancePage] currentCompany变化，重新加载数据:', prevCurrentCompanyRef.current, '->', currentCompany);
             // 🔥 重置初始化状态，允许重新加载
             hasInitializedRef.current = false;
             // 🔥 清除所有相关缓存
@@ -599,7 +599,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             // 🔥 清除相关缓存
             const cacheKey = `ATTENDANCE_SHEETS_${currentCompany}_${month}`;
             await SmartCache.remove(cacheKey);
-            console.log('[AttendancePage] 已清除缓存:', cacheKey);
+            // console.log('[AttendancePage] 已清除缓存:', cacheKey);
             
             // Force refresh for this specific month
             // 🔥 使用本地服务器接口
@@ -608,7 +608,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             // 🔥 处理304 Not Modified状态码
             let apiResponse;
             if (response.status === 304) {
-                console.log(`[AttendancePage] 收到304响应，${month}月数据未修改`);
+                // console.log(`[AttendancePage] 收到304响应，${month}月数据未修改`);
                 // 304表示内容未修改，但我们仍需要处理这种情况
                 throw new Error("数据未修改，无需刷新");
             } else if (!response.ok) {
@@ -621,24 +621,24 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 throw new Error(apiResponse.message || "刷新考勤数据失败, 未返回有效数据。");
             }
             const dbRecords = apiResponse.data;
-            console.log('[AttendancePage] handleRefreshSheetDetail - 原始数据:', {
-                recordsCount: dbRecords.length,
-                currentCompany,
-                sampleRecords: dbRecords.slice(0, 3).map((r: any) => ({
-                    mainCompany: r.mainCompany,
-                    hasRecords: !!r.records
-                }))
-            });
+            // console.log('[AttendancePage] handleRefreshSheetDetail - 原始数据:', {
+                // recordsCount: dbRecords.length,
+                // currentCompany,
+                // sampleRecords: dbRecords.slice(0, 3).map((r: any) => ({
+                    // mainCompany: r.mainCompany,
+                    // hasRecords: !!r.records
+                // }))
+            // });
 
             const employeeRecords: EmployeeAttendanceRecord[] = dbRecords
                 .filter((d: any) => {
                     const matches = d.mainCompany === currentCompany;
                     if (!matches) {
-                        console.log('[AttendancePage] handleRefreshSheetDetail - 过滤掉记录:', {
-                            mainCompany: d.mainCompany,
-                            currentCompany,
-                            matches
-                        });
+                        // console.log('[AttendancePage] handleRefreshSheetDetail - 过滤掉记录:', {
+                            // mainCompany: d.mainCompany,
+                            // currentCompany,
+                            // matches
+                        // });
                     }
                     // 🔥 临时禁用过滤，保留所有记录用于调试
                     // return matches;
@@ -701,30 +701,30 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
 
     const selectedSheet = useMemo(() => {
         const found = sheets.find(s => s.id === selectedSheetId);
-        console.log('[AttendancePage] selectedSheet计算:', {
-            selectedSheetId,
-            sheetsCount: sheets.length,
-            foundSheet: found ? {
-                id: found.id,
-                title: found.title,
-                month: found.month,
-                employeeRecordsLength: found.employeeRecords?.length,
-                employeeRecords: found.employeeRecords,
-                hasEmployeeRecords: !!found.employeeRecords,
-                isArray: Array.isArray(found.employeeRecords)
-            } : null
-        });
+        // console.log('[AttendancePage] selectedSheet计算:', {
+            // selectedSheetId,
+            // sheetsCount: sheets.length,
+            // foundSheet: found ? {
+                // id: found.id,
+                // title: found.title,
+                // month: found.month,
+                // employeeRecordsLength: found.employeeRecords?.length,
+                // employeeRecords: found.employeeRecords,
+                // hasEmployeeRecords: !!found.employeeRecords,
+                // isArray: Array.isArray(found.employeeRecords)
+            // } : null
+        // });
         return found;
     }, [sheets, selectedSheetId]);
 
     const renderContent = () => {
-        console.log('[AttendancePage] renderContent called:', {
-            view,
-            isLoading,
-            isRefreshing,
-            sheetsLength: sheets,
-            globalMonth
-        });
+        // console.log('[AttendancePage] renderContent called:', {
+            // view,
+            // isLoading,
+            // isRefreshing,
+            // sheetsLength: sheets,
+            // globalMonth
+        // });
         
         if (view === 'dashboard' && isLoading && !isRefreshing) {
             return (

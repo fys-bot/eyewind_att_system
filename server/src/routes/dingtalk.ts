@@ -1,5 +1,6 @@
 import express from 'express';
 import axios from 'axios';
+import { attendanceStatusService } from '../services/attendanceStatusService';
 
 const router = express.Router();
 
@@ -16,6 +17,525 @@ const DING_GETATTCOLUMNS_PATH = '/topapi/attendance/getattcolumns'; // 获取考
 const DING_GETCOLUMNVAL_PATH = '/topapi/attendance/getcolumnval'; // 获取单个考勤指标值
 const DING_HRM_EMPLOYEE_LIST_PATH = '/topapi/smartwork/hrm/employee/v2/list'; // 获取员工花名册字段信息
 const DING_CORPCONVERSATION_PATH = '/topapi/message/corpconversation/asyncsend_v2'; // 发送工作通知
+const DING_TODO_CREATE_PATH = '/topapi/workrecord/add'; // 创建待办
+const DING_TODO_DELETE_PATH = '/topapi/workrecord/update'; // 删除/更新待办
+const DING_PROCESS_INSTANCE_PATH = '/topapi/processinstance/get'; // 获取流程实例
+const DING_ATTENDANCE_LOAD_PATH = '/attendance/list'; // 加载考勤数据
+const DING_ATTENDANCE_UPSET_PATH = '/topapi/attendance/updatedata'; // 更新考勤数据
+
+/**
+ * 获取钉钉Access Token
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/gettoken
+ */
+export const fetchToken = async (req: express.Request, res: express.Response) => {
+  try {
+    // 1. 从请求体中安全地获取 appkey 和 appsecret
+    const { appkey, appsecret } = req.body;
+
+    if (!appkey || !appsecret) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要的参数 appkey 或 appsecret'
+      });
+    }
+
+    // 2. 构造完整的 API URL
+    const url = `${DING_OAPI}${DING_GETTOKEN_PATH}`;
+
+    // 3. 使用 URLSearchParams 构造查询参数对象
+    const params = new URLSearchParams({
+      appkey,   // 钉钉接口 key
+      appsecret, // 钉钉接口 secret
+    });
+
+    // 4. 发起 GET 请求
+    const response = await axios.get(`${url}?${params}`);
+
+    // 检查 HTTP 状态码
+    if (response.status !== 200) {
+      const errorMessage = `获取 Token 失败，HTTP 状态码: ${response.status}`;
+      console.error("获取 Token HTTP 错误:", response.status, response.data);
+      return res.status(500).json({ 
+        success: false, 
+        message: errorMessage, 
+        http_status: response.status 
+      });
+    }
+
+    const data = response.data;
+
+    // 5. 检查钉钉 API 业务错误码
+    if (data.errcode && data.errcode !== 0) {
+      console.error("获取 Token 业务错误:", data);
+      const errorMessage = `获取 Token 失败 [${data.errcode}]: ${data.errmsg || '未知钉钉错误'}`;
+      return res.status(400).json({ 
+        success: false, 
+        message: errorMessage, 
+        dingtalk_code: data.errcode,
+        dingtalk_msg: data.errmsg,
+        full_response: data 
+      });
+    }
+
+    // 成功，返回数据
+    return res.json({ 
+      data, 
+      success: true 
+    });
+  } catch (error: any) {
+    const errorMessage = `服务器处理请求时发生意外错误: ${error.message}`;
+    console.error("fetchToken 意外错误:", error);
+    return res.status(500).json({ 
+      success: false, 
+      message: errorMessage, 
+      internal_error: true 
+    });
+  }
+};
+
+/**
+ * 发送企业消息
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/corp/send
+ */
+export const sendCorpMessage = async (req: express.Request, res: express.Response) => {
+  try {
+    const { dingToken, agent_id, userid_list, msg } = req.body;
+
+    if (!dingToken || !agent_id || !userid_list || !msg) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要的参数'
+      });
+    }
+
+    const payload = {
+      agent_id,
+      userid_list,
+      msg
+    };
+
+    const result = await _callDingTalkApi(dingToken, DING_CORPCONVERSATION_PATH, payload);
+    
+    return res.json({
+      success: true,
+      data: result
+    });
+  } catch (error: any) {
+    console.error("发送企业消息失败:", error);
+    return res.status(500).json({
+      success: false,
+      message: `发送企业消息失败: ${error.message}`
+    });
+  }
+};
+
+/**
+ * 创建待办
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/tudo/create
+ */
+export const createTodo = async (req: express.Request, res: express.Response) => {
+  try {
+    const { dingToken, userid, title, url, pc_url } = req.body;
+
+    if (!dingToken || !userid || !title) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要的参数'
+      });
+    }
+
+    const payload = {
+      userid,
+      title,
+      url: url || '',
+      pc_url: pc_url || url || ''
+    };
+
+    const result = await _callDingTalkApi(dingToken, DING_TODO_CREATE_PATH, payload);
+    
+    return res.json({
+      success: true,
+      data: result
+    });
+  } catch (error: any) {
+    console.error("创建待办失败:", error);
+    return res.status(500).json({
+      success: false,
+      message: `创建待办失败: ${error.message}`
+    });
+  }
+};
+
+/**
+ * 删除待办
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/tudo/delete
+ */
+export const deleteTodo = async (req: express.Request, res: express.Response) => {
+  try {
+    const { dingToken, record_id } = req.body;
+
+    if (!dingToken || !record_id) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要的参数'
+      });
+    }
+
+    const payload = {
+      record_id,
+      status: 1 // 1表示完成/删除
+    };
+
+    const result = await _callDingTalkApi(dingToken, DING_TODO_DELETE_PATH, payload);
+    
+    return res.json({
+      success: true,
+      data: result
+    });
+  } catch (error: any) {
+    console.error("删除待办失败:", error);
+    return res.status(500).json({
+      success: false,
+      message: `删除待办失败: ${error.message}`
+    });
+  }
+};
+
+/**
+ * 撤回企业消息
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/corp/recall
+ */
+export const recallCorpMessage = async (req: express.Request, res: express.Response) => {
+  try {
+    const { dingToken, msg_task_id } = req.body;
+
+    if (!dingToken || !msg_task_id) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要的参数'
+      });
+    }
+
+    const payload = {
+      msg_task_id
+    };
+
+    // 钉钉撤回消息API路径
+    const result = await _callDingTalkApi(dingToken, '/topapi/message/corpconversation/recall', payload);
+    
+    return res.json({
+      success: true,
+      data: result
+    });
+  } catch (error: any) {
+    console.error("撤回企业消息失败:", error);
+    return res.status(500).json({
+      success: false,
+      message: `撤回企业消息失败: ${error.message}`
+    });
+  }
+};
+
+/**
+ * 加载考勤数据 - 从数据库查询
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/attendance/load/{userid}
+ * 支持多种查询模式：按用户ID、按月份、按用户ID+月份组合查询
+ */
+export const loadAttendanceData = async (req: express.Request, res: express.Response) => {
+  try {
+    // 从请求 URL 中获取最后一部分作为参数
+    const pathSegment = req.params.userid || req.params[0]; // 兼容不同的路由参数
+    const monthRegex = /^\d{4}-\d{2}$/;  // 月份格式正则表达式
+
+    // 查询所有考勤记录
+    let records: any[] = [];
+
+    // 如果是 'load'，则查询所有记录
+    if (pathSegment === 'load') {
+      // 执行查询所有考勤记录 - 使用service层
+      records = await attendanceStatusService.getAllRecords();
+
+      // 如果没有记录，返回提示
+      if (records.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: '没有找到相关的考勤记录。',
+        });
+      }
+
+      // 按月份进行分类
+      const groupedByMonth = records.reduce((result: Record<string, any[]>, record: any) => {
+        const month = record.attd_month;
+        if (!result[month]) {
+          result[month] = [];  // 如果该月不存在，初始化为数组
+        }
+        result[month].push(record);  // 将当前记录添加到对应月份的数组中
+        return result;
+      }, {});
+
+      // 返回按月份分类的数据
+      return res.json({
+        success: true,
+        message: '考勤记录已按月份分类。',
+        data: groupedByMonth,
+      });
+    }
+
+    // 检查是否是用户ID和月份的组合查询 (格式: userid**attd_month)
+    const [userid, attd_month] = pathSegment.split('**');
+    if (userid && attd_month) {
+      records = await attendanceStatusService.getRecordsByUserAndMonth(userid, attd_month);
+    } else if (monthRegex.test(pathSegment)) {
+      // 如果是有效的月份格式
+      records = await attendanceStatusService.getRecordsByMonth(pathSegment);
+    } else {
+      // 否则，假设是 userid
+      records = await attendanceStatusService.getRecordsByUser(pathSegment);
+    }
+
+    // 如果没有记录，返回提示
+    if (records.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '没有找到相关的考勤记录。',
+      });
+    }
+
+    // 根据查询类型返回不同的消息
+    if (monthRegex.test(pathSegment)) {
+      return res.json({
+        success: true,
+        message: `成功查询 ${pathSegment} 月 ${records.length} 条考勤记录。`,
+        data: records, // 返回查询到的记录
+      });
+    }
+
+    if (userid && attd_month) {
+      return res.json({
+        success: true,
+        message: `成功查询用户 ${userid} 在 ${attd_month} 月的考勤记录。`,
+        data: records, // 返回查询到的记录
+      });
+    }
+
+    // 如果路径中传递的是 userid，直接返回该用户的考勤记录
+    return res.json({
+      success: true,
+      message: `成功查询用户 ${pathSegment} 的考勤记录。`,
+      data: records, // 返回查询到的记录
+    });
+  } catch (error: any) {
+    // 错误处理：捕获异常并记录
+    console.error('读取考勤状态时发生错误:', error);
+    return res.status(500).json({
+      success: false,
+      message: '读取考勤状态失败，内部错误。',
+      detail: error.message?.substring(0, 200),  // 错误详情（限制为 200 字符）
+    });
+  }
+};
+
+/**
+ * 更新考勤数据 - 批量UPSERT到数据库
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/attendance/upset
+ * 该接口基于 userid 和 attd_month 作为唯一键进行操作
+ */
+export const updateAttendanceData = async (req: express.Request, res: express.Response) => {
+  try {
+    // 从请求体中获取待批量 upsert 的数据 (data 数组)
+    const { data = [] } = req.body;
+
+    // 检查 data 是否有效，必须是一个数组且非空
+    if (!Array.isArray(data) || data.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '操作失败：必须提供有效的 data 数组。',
+      });
+    }
+
+    // 校验每条记录的关键字段：确保每条记录都有 userid 和 attd_month
+    const invalid = data.filter((r: any) => !r.userid || !r.attd_month);
+    if (invalid.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `操作失败：存在缺少 userid 或 attd_month 的记录，共 ${invalid.length} 条。`,
+        invalid_records: invalid, // 返回缺失字段的记录
+      });
+    }
+
+    // 添加时间戳：根据是否已有创建时间来设置字段
+    const dataWithTimestamps = data.map((record: any) => ({
+      ...record,
+      created_at: record.created_at || new Date(),  // 如果没有传入 created_at，则使用当前时间
+      updated_at: new Date(),  // 每次更新时，都设置 updated_at 为当前时间
+    }));
+
+    // 获取更新字段（排除 id 和 created_at）
+    const dataKey = Object.keys(dataWithTimestamps[0]).filter(key => 
+      key !== 'created_at' && key !== 'id' // id 通常是自增主键，created_at 不应被更新
+    );
+
+    // 执行批量 UPSERT 操作 - 使用service层
+    const result = await attendanceStatusService.batchUpsert(dataWithTimestamps);
+
+    // 返回操作结果
+    return res.json({
+      success: true,
+      message: `批量 UPSERT 成功，共处理 ${data.length} 条记录。`,
+      data: {
+        total: data.length,             // 总共处理的记录数
+        success_count: Array.isArray(result) ? result.length : data.length, // 成功更新/插入的记录数
+      },
+    });
+  } catch (error: any) {
+    // 捕获异常并返回错误信息
+    console.error('批量 UPSERT 考勤状态时发生错误:', error);
+    
+    // 处理数据库约束错误
+    if (error.message && error.message.indexOf('duplicate key') > -1) {
+      return res.status(409).json({
+        success: false,
+        message: '数据冲突：存在重复的记录。',
+        detail: error.detail || error.message.substring(0, 200),
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      message: '批量 UPSERT 失败，内部错误。',
+      detail: error.message?.substring(0, 200),  // 错误详情（限制为 200 字符）
+    });
+  }
+};
+
+/**
+ * 获取流程实例
+ * 对应原外部API: https://sg.api.eyewind.cn/etl/dingding/processInstances/{procInstId}
+ */
+export const getProcessInstance = async (req: express.Request, res: express.Response) => {
+  try {
+    const { procInstId } = req.params;
+    const { dingToken } = req.body;
+
+    if (!dingToken || !procInstId) {
+      return res.status(400).json({
+        success: false,
+        message: '缺少必要的参数'
+      });
+    }
+
+    // 使用钉钉新版API获取流程实例详情
+    const response = await axios.get(
+      `https://api.dingtalk.com/v1.0/workflow/processInstances?processInstanceId=${procInstId}`,
+      {
+        headers: {
+          'x-acs-dingtalk-access-token': dingToken,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const data = response.data;
+    if (!data) {
+      return res.json({
+        success: true,
+        data: {}
+      });
+    }
+
+    const instance = data.result || data.processInstance || data.data || data; // 兼容不同返回格式
+
+    // ---- 1. 基础字段 ----
+    const instanceId = instance.processInstanceId;
+    const title = instance.title || instance.processInstanceName;
+    const originatorUserId = instance.originatorUserId || instance.startUserId;
+    const status = instance.status;
+    const startTime = Number(instance.createTime || instance.startTime);
+    const finishTime = Number(instance.finishTime || instance.completeTime);
+    const durationHours = finishTime
+      ? Number(((finishTime - startTime) / 3600000).toFixed(2))
+      : undefined;
+
+    // ---- 2. 表单字段（自动转为 key:value） ----
+    let formValues: Record<string, any> = {};
+    const forms = instance.formComponentValues || instance.formValues || [];
+    if (Array.isArray(forms)) {
+      forms.forEach((item: any) => {
+        if (item.name && item.value != null) {
+          formValues[item.name] = item.value;
+        }
+      });
+    }
+
+    // ---- 3. 智能推断审批类型 ----
+    const detectBizType = () => {
+      const text = (title + JSON.stringify(formValues)).toLowerCase();
+      if (text.includes('请假') || text.includes('leave')) return '请假';
+      if (text.includes('加班') || text.includes('overtime')) return '加班';
+      if (text.includes('报销') || text.includes('reimburse')) return '报销';
+      if (text.includes('出差') || text.includes('travel')) return '出差';
+      if (text.includes('采购') || text.includes('purchase')) return '采购';
+      return '通用审批';
+    };
+
+    const bizType = detectBizType();
+
+    // ---- 4. 特殊处理请假类型的表单数据 ----
+    if (bizType === '请假') {
+      const result: Record<string, any> = {
+        date: formValues["请假申请日期"],
+        department: formValues["所在部门"],
+        reason: formValues["请假事由"]
+      };
+
+      const weirdKey = Object.keys(formValues).find(k => k.includes("开始时间"));
+      if (weirdKey) {
+        try {
+          const arr = JSON.parse(formValues[weirdKey]); // 反序列化成数组
+          result.start = arr[0];
+          result.end = arr[1];
+          result.duration = arr[2];
+          result.durationUnit = arr[3];
+          result.leaveType = arr[4];
+        } catch (e) {
+          console.error("解析请假时间数据失败", e);
+        }
+      }
+      formValues = result;
+    }
+
+    // ---- 5. 当前审批人 ----
+    let currentApprover = null;
+    if (instance.tasks && Array.isArray(instance.tasks)) {
+      const pending = instance.tasks.find((t: any) => t.status === 'RUNNING');
+      if (pending) {
+        currentApprover = pending.taskUserId || pending.userId;
+      }
+    }
+
+    return res.json({
+      data: {
+        instanceId,
+        title,
+        bizType,
+        originatorUserId,
+        status,
+        startTime,
+        finishTime,
+        durationHours,
+        currentApprover,
+        formValues,
+      },
+      success: true,
+    });
+  } catch (error: any) {
+    console.error(`[${new Date().toLocaleString()}] processInstances 接口处理失败！`, error);
+    return res.status(500).json({
+      success: false,
+      message: `获取审批详情失败：${error.message}`,
+    });
+  }
+};
 
 /**
  * 通用：检查钉钉 API 响应的 HTTP 状态和业务错误码。
@@ -116,7 +636,7 @@ const _queryAllUserIds = async (accessToken: string, offset: number = 0, allUser
 
     // 如果存在下一页游标且不为 -1，则继续递归
     if (nextCursor !== null && nextCursor !== undefined && nextCursor !== -1) {
-      console.log(`[${new Date().toLocaleString()}] DingTalk API 当前已获取 ${allUserIds.length} 条用户ID，继续请求下一页游标: ${nextCursor}`);
+      // console.log(`[${new Date().toLocaleString()}] DingTalk API 当前已获取 ${allUserIds.length} 条用户ID，继续请求下一页游标: ${nextCursor}`);
       return _queryAllUserIds(accessToken, nextCursor, allUserIds);
     } else {
       return allUserIds;
@@ -237,7 +757,7 @@ const _fetchHrmEmployeeData = async (accessToken: string, allUserIds: string[]):
 
     // 增加延迟以避免 QPS 限制
     if (i + BATCH_SIZE < allUserIds.length) {
-      console.log(`[${new Date().toLocaleString()}] DingTalk API HRM批次间等待 500ms 避免QPS限流...`);
+      // console.log(`[${new Date().toLocaleString()}] DingTalk API HRM批次间等待 500ms 避免QPS限流...`);
       await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
@@ -264,7 +784,7 @@ const fetchAllEmployees = async (req: express.Request, res: express.Response) =>
       });
     }
 
-    console.log(`[${new Date().toLocaleString()}] DingTalk API 开始获取所有员工信息...`);
+    // console.log(`[${new Date().toLocaleString()}] DingTalk API 开始获取所有员工信息...`);
 
     // 2. 异步并行获取所有用户ID 和 部门映射
     const [allUserIds, departmentMap] = await Promise.all([
@@ -272,12 +792,12 @@ const fetchAllEmployees = async (req: express.Request, res: express.Response) =>
       _fetchDepartmentMap(dingToken),
     ]);
 
-    console.log({allUserIds, departmentMap})
+    // console.log({allUserIds, departmentMap})
 
     // 3. 异步获取 HRM 主体公司数据 (依赖 allUserIds)
     const hrmCompanyMap = await _fetchHrmEmployeeData(dingToken, allUserIds);
 
-    console.log(`[${new Date().toLocaleString()}] DingTalk API 成功获取 ${allUserIds.length} 个用户ID、${departmentMap.size} 个部门和 ${hrmCompanyMap.size} 条员工数据。`);
+    // console.log(`[${new Date().toLocaleString()}] DingTalk API 成功获取 ${allUserIds.length} 个用户ID、${departmentMap.size} 个部门和 ${hrmCompanyMap.size} 条员工数据。`);
 
     // 4. 批量获取用户详情 (严格限制并发和添加延迟以防止QPS限流)
     const CONCURRENCY_LIMIT = 18; // 降低并发数
@@ -287,7 +807,7 @@ const fetchAllEmployees = async (req: express.Request, res: express.Response) =>
     // 统计不同 mainCompany 对应的人数
     const companyCounts: Record<string, string[]> = {};
 
-    console.log(`[${new Date().toLocaleString()}] DingTalk API 开始获取 ${allUserIds.length} 个用户详情，并发限制: ${CONCURRENCY_LIMIT}，批次延迟: ${DELAY_BETWEEN_BATCHES}ms`);
+    // console.log(`[${new Date().toLocaleString()}] DingTalk API 开始获取 ${allUserIds.length} 个用户详情，并发限制: ${CONCURRENCY_LIMIT}，批次延迟: ${DELAY_BETWEEN_BATCHES}ms`);
 
     // 分批次循环处理所有用户ID
     for (let i = 0; i < allUserIds.length; i += CONCURRENCY_LIMIT) {
@@ -329,11 +849,11 @@ const fetchAllEmployees = async (req: express.Request, res: express.Response) =>
           }
         });
 
-      console.log(`[${new Date().toLocaleString()}] DingTalk API 完成处理 ${i + chunk.length} / ${allUserIds.length} 条记录...`);
+      // console.log(`[${new Date().toLocaleString()}] DingTalk API 完成处理 ${i + chunk.length} / ${allUserIds.length} 条记录...`);
       
       // 添加批次间延迟，避免QPS限流
       if (i + CONCURRENCY_LIMIT < allUserIds.length) {
-        console.log(`[${new Date().toLocaleString()}] DingTalk API 等待 ${DELAY_BETWEEN_BATCHES}ms 避免QPS限流...`);
+        // console.log(`[${new Date().toLocaleString()}] DingTalk API 等待 ${DELAY_BETWEEN_BATCHES}ms 避免QPS限流...`);
         await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES));
       }
     }
@@ -411,7 +931,7 @@ export const sleep = (ms: number): Promise<void> => new Promise(resolve => setTi
 export const _callDingTalkApi = async (token: string, apiPath: string, payload: any): Promise<any> => {
     // 使用 DING_OAPI 拼接完整的 URL
     const url = `${DING_OAPI}${apiPath}?access_token=${token}`;
-    console.log(`[${new Date().toLocaleString()}] DingTalk API Calling: ${apiPath}`, payload?.userid && `userid: ${payload?.userid}`);
+    // console.log(`[${new Date().toLocaleString()}] DingTalk API Calling: ${apiPath}`, payload?.userid && `userid: ${payload?.userid}`);
 
     const response = await axios.post(url, payload, {
         headers: { 'Content-Type': 'application/json' },
@@ -466,7 +986,51 @@ const _processPunchRecord = (record: any, employeeMap: Map<string, {name: string
 };
 
 /**
+ * 计算获取打卡数据的实际日期范围
+ * 🔥 优化：起始日期改为上个月的最后一个工作日，确保跨月规则有足够的数据
+ * @param fromDate 原始开始日期 (格式: "YYYY-MM-DD HH:mm:ss")
+ * @param toDate 原始结束日期 (格式: "YYYY-MM-DD HH:mm:ss")
+ * @returns 调整后的日期范围
+ */
+const calculateExtendedDateRange = (fromDate: string, toDate: string): { adjustedFromDate: string; adjustedToDate: string; isPreviousMonthIncluded: boolean } => {
+    const startDate = new Date(fromDate.split(' ')[0].replace(/-/g, '/'));
+    const endDate = new Date(toDate.split(' ')[0].replace(/-/g, '/'));
+    
+    // 🔥 新逻辑：总是从上个月的最后一个工作日开始
+    // 这样可以确保：
+    // 1. 跨月规则有数据（本月第一天需要上月最后一天的打卡）
+    // 2. 跨周规则有数据（本月第一周的周一需要上周五的打卡）
+    // 3. 数据更完整，避免边界情况
+    
+    let adjustedStart = new Date(startDate);
+    let isPreviousMonthIncluded = false;
+    
+    // 计算上个月的最后一天
+    const lastDayOfPreviousMonth = new Date(startDate.getFullYear(), startDate.getMonth(), 0);
+    
+    // 🔥 从上个月最后一天往前推，找到最后一个工作日
+    // 简化实现：往前推10-14天，确保包含上个月最后一个工作日
+    // 这样可以覆盖：周末 + 可能的节假日 + 上周五
+    adjustedStart = new Date(lastDayOfPreviousMonth);
+    adjustedStart.setDate(adjustedStart.getDate() - 13); // 往前推13天，共14天范围
+    isPreviousMonthIncluded = true;
+    
+    // console.log(`[calculateExtendedDateRange] 🔥 优化：从上个月最后一个工作日开始获取数据`);
+    // console.log(`[calculateExtendedDateRange] 原始范围: ${fromDate} ~ ${toDate}`);
+    // console.log(`[calculateExtendedDateRange] 上个月最后一天: ${lastDayOfPreviousMonth.toISOString().split('T')[0]}`);
+    // console.log(`[calculateExtendedDateRange] 调整后起始日期: ${adjustedStart.toISOString().split('T')[0]} (往前推14天)`);
+    // console.log(`[calculateExtendedDateRange] 调整后范围: ${adjustedStart.toISOString().split('T')[0]} ~ ${endDate.toISOString().split('T')[0]}`);
+    
+    return {
+        adjustedFromDate: `${adjustedStart.toISOString().split('T')[0]} 00:00:00`,
+        adjustedToDate: toDate,
+        isPreviousMonthIncluded
+    };
+};
+
+/**
  * 接口 1: 获取员工打卡详情 (已优化：支持分页、7天范围分割和50人ID分割获取全部数据)
+ * 🔥 优化：自动从上个月最后一个工作日开始获取数据，确保跨月/跨周规则有足够的数据
  * 对应钉钉 API: /attendance/listRecord
  * @param {express.Request} req 后端请求上下文
  * @param {express.Response} res 响应对象
@@ -484,17 +1048,17 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
             });
         }
 
-        console.log(`[${new Date().toLocaleString()}] Attendance 开始获取用户 ${employees.length} 人在 ${fromDate} 到 ${toDate} 间的打卡详情...`);
+        // console.log(`[${new Date().toLocaleString()}] Attendance 开始获取用户 ${employees.length} 人在 ${fromDate} 到 ${toDate} 间的打卡详情...`);
 
-        // 🔥 添加详细的日期解析调试信息
-        // console.log(`[DEBUG] 原始日期参数:`, { fromDate, toDate });
+        // 🔥 计算扩展的日期范围（包含上个月最后几天）
+        const { adjustedFromDate, adjustedToDate, isPreviousMonthIncluded } = calculateExtendedDateRange(fromDate, toDate);
         
         const allRecords: any[] = [];
         const USER_CHUNK_LIMIT = 50;
 
         // 解析日期，并修正日期解析兼容性问题 (将 '-' 替换为 '/')
-        const startDayString = fromDate.split(' ')[0];
-        const endDayString = toDate.split(' ')[0];
+        const startDayString = adjustedFromDate.split(' ')[0];
+        const endDayString = adjustedToDate.split(' ')[0];
         const overallEnd = new Date(endDayString.replace(/-/g, '/'));
         
         // 🔥 添加日期解析调试信息
@@ -515,7 +1079,7 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
         // 2. 【用户ID分块循环】: 每次处理最多 50 个用户ID
         for (let u = 0; u < userIdList.length; u += USER_CHUNK_LIMIT) {
             const currentUserChunk = userIdList.slice(u, u + USER_CHUNK_LIMIT);
-            console.log(`[${new Date().toLocaleString()}] Attendance - 正在处理用户块 (${u + 1} to ${u + currentUserChunk.length})`);
+            // console.log(`[${new Date().toLocaleString()}] Attendance - 正在处理用户块 (${u + 1} to ${u + currentUserChunk.length})`);
 
             // 3. 【日期分段循环】: 每次处理最多 7 天 (每次用户块循环都需要从原始的起始日期开始)
             const dateChunkStart = new Date(startDayString.replace(/-/g, '/'));
@@ -524,7 +1088,7 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
             
             while (dateChunkStart <= overallEnd && iterations < MAX_ITERATIONS) {
                 iterations++;
-                console.log(`[${new Date().toLocaleString()}] Attendance - 日期循环第${iterations}次: ${dateChunkStart.toISOString().split('T')[0]} <= ${overallEnd.toISOString().split('T')[0]}`);
+                // console.log(`[${new Date().toLocaleString()}] Attendance - 日期循环第${iterations}次: ${dateChunkStart.toISOString().split('T')[0]} <= ${overallEnd.toISOString().split('T')[0]}`);
                 
                 // 1. 计算当前分段的结束日期
                 let currentEnd = new Date(dateChunkStart);
@@ -539,7 +1103,7 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
                 const chunkWorkDateFrom = dateChunkStart.toISOString().split('T')[0] + ' 00:00:00';
                 const chunkWorkDateTo = currentEnd.toISOString().split('T')[0] + ' 23:59:59';
 
-                console.log(`[${new Date().toLocaleString()}] Attendance - 日期分段: ${chunkWorkDateFrom} to ${chunkWorkDateTo}`);
+                // console.log(`[${new Date().toLocaleString()}] Attendance - 日期分段: ${chunkWorkDateFrom} to ${chunkWorkDateTo}`);
 
                 // --- 4. 分段内的分页获取逻辑 ---
                 let offset = 0;
@@ -589,7 +1153,7 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
                     offset += limit;
 
                     if (hasMore) {
-                        console.log(`[${new Date().toLocaleString()}] Attendance   - 分段内继续分页... 当前总记录数: ${allRecords.length}`);
+                        // console.log(`[${new Date().toLocaleString()}] Attendance   - 分段内继续分页... 当前总记录数: ${allRecords.length}`);
                     }
                 }
 
@@ -601,7 +1165,7 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
                 
                 // 检查是否需要继续循环
                 if (nextStart > overallEnd) {
-                    console.log(`[${new Date().toLocaleString()}] Attendance - 日期循环结束: 下次开始日期 ${nextStart.toISOString().split('T')[0]} 超过结束日期`);
+                    // console.log(`[${new Date().toLocaleString()}] Attendance - 日期循环结束: 下次开始日期 ${nextStart.toISOString().split('T')[0]} 超过结束日期`);
                     break;
                 }
                 
@@ -615,38 +1179,33 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
             }
         }
 
-        console.log(`[${new Date().toLocaleString()}] Attendance 打卡详情获取完成，共 ${allRecords.length} 条记录。`);
+        // console.log(`[${new Date().toLocaleString()}] Attendance 打卡详情获取完成，共 ${allRecords.length} 条记录。`);
 
-        // 🔥 添加31号数据的特别检查
-        const day31Records = allRecords.filter(record => {
-            const workDate = new Date(record.workDate);
-            return workDate.getDate() === 31;
+        // 🔥 标记哪些记录是上个月的数据（用于跨天打卡规则）
+        const originalFromDate = new Date(fromDate.split(' ')[0].replace(/-/g, '/'));
+        const processedRecords = allRecords.map((record) => {
+            const recordDate = new Date(record.workDate);
+            const isPreviousMonth = recordDate < originalFromDate;
+            
+            // 处理记录并添加标记
+            const processed = _processPunchRecord(record, employeeDetailsMap);
+            return {
+                ...processed,
+                isPreviousMonthData: isPreviousMonth  // 标记是否为上个月数据
+            };
         });
-        
-        // if (day31Records.length > 0) {
-        //     console.log(`[DEBUG] 发现 ${day31Records.length} 条31号数据:`, 
-        //         day31Records.slice(0, 3).map(record => ({
-        //             userId: record.userId,
-        //             originalWorkDate: record.workDate,
-        //             parsedWorkDate: new Date(record.workDate).toISOString(),
-        //             year: new Date(record.workDate).getFullYear(),
-        //             month: new Date(record.workDate).getMonth() + 1,
-        //             day: new Date(record.workDate).getDate(),
-        //             checkType: record.checkType
-        //         }))
-        //     );
-        // }
-
-        // 6. 【修改处理步骤】：对所有记录进行映射、时间转换和员工信息增强
-        const processedRecords = allRecords.map((record) =>
-            _processPunchRecord(record, employeeDetailsMap)
-        );
 
         // 7. 返回最终结果
         return res.json({
             success: true,
             data: processedRecords,
             totalCount: allRecords.length,
+            metadata: {
+                requestedRange: { from: fromDate, to: toDate },
+                actualRange: { from: adjustedFromDate, to: adjustedToDate },
+                isPreviousMonthIncluded,
+                previousMonthRecordsCount: processedRecords.filter(r => r.isPreviousMonthData).length
+            }
         });
     } catch (error: any) {
         console.error(`[${new Date().toLocaleString()}] PunchDetails 接口处理失败！`, error);
@@ -658,7 +1217,16 @@ export const fetchPunchDetails = async (req: express.Request, res: express.Respo
 };
 
 // 路由定义
+router.post('/gettoken', fetchToken);
 router.post('/employees', fetchAllEmployees);
 router.post('/punch', fetchPunchDetails);
+router.post('/corp/send', sendCorpMessage);
+router.post('/tudo/create', createTodo);
+router.post('/tudo/delete', deleteTodo);
+router.post('/corp/recall', recallCorpMessage);
+router.post('/processInstances/:procInstId', getProcessInstance);
+router.get('/attendance/load/:userid', loadAttendanceData);
+router.get('/attendance/load', loadAttendanceData); // 支持查询所有记录
+router.post('/attendance/upset', updateAttendanceData);
 
 export default router;

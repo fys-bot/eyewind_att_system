@@ -8,7 +8,8 @@ import {
     SparklesIcon, ChevronRightIcon, ChevronDownIcon, RefreshCwIcon, UsersIcon 
 } from '../../Icons.tsx';
 import { Avatar } from './AttendanceShared.tsx';
-import { getLateMinutes, isFullDayLeave, fetchProcessDetail, calculateDailyLeaveDuration, checkTimeInLeaveRange, SmartCache } from '../utils.ts';
+import { isFullDayLeave, fetchProcessDetail, calculateDailyLeaveDuration, checkTimeInLeaveRange, SmartCache } from '../utils.ts';
+import { AttendanceRuleManager } from '../AttendanceRuleEngine.ts';
 import JSZip from 'jszip';
 import saveAs from 'file-saver';
 import { useAttendanceStats } from './useAttendanceStats.ts';
@@ -1058,11 +1059,11 @@ export const AttendanceCalendarView: React.FC<{
             const { attendanceApiService } = await import('../../../services/attendanceApiService.ts');
             const companyId = currentCompany === 'eyewind' || currentCompany === '风眼' ? 'eyewind' : 'hydodo';
             
-            console.log(`[AttendanceCalendar] 开始保存 ${updates.length} 条考勤记录到数据库`);
+            // console.log(`[AttendanceCalendar] 开始保存 ${updates.length} 条考勤记录到数据库`);
             
             const result = await attendanceApiService.batchUpdateDaily(companyId, updates);
             
-            console.log(`[AttendanceCalendar] 数据库保存成功:`, result);
+            // console.log(`[AttendanceCalendar] 数据库保存成功:`, result);
             
             // 🔥 保存成功后，更新本地缓存
             const cacheKey = `ATTENDANCE_MAP_CACHE_${currentCompany}_${month}`;
@@ -1575,40 +1576,229 @@ export const AttendanceCalendarView: React.FC<{
                                         const processDetail = procId ? processDataMap[procId] : null;
                                         const leaveType = processDetail?.formValues?.leaveType || processDetail?.bizType;
 
-                                        let lastFridayOffDutyTime: Date | null = null;
-                                        let yesterdayApprove2030 = false;
+                                        // 🔥 使用规则引擎计算迟到分钟数
+                                        const companyKey = (user.mainCompany?.includes('海多多') || user.mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
+                                        const ruleEngine = AttendanceRuleManager.getEngine(companyKey);
+                                        
+                                        // 🔥 向前查询回调函数：查找前 N 天的下班打卡时间
+                                        const lookbackCheckoutFinder = (daysBack: number): Date | undefined => {
+                                            const targetDate = new Date(dayDate);
+                                            targetDate.setDate(dayDate.getDate() - daysBack);
+                                            const targetDay = targetDate.getDate();
+                                            const targetYear = targetDate.getFullYear();
+                                            const targetMonth = targetDate.getMonth();
+                                            
+                                            // 🔥 严格验证：只查找属于目标日期的打卡记录
+                                            let targetDayAttendance = null;
+                                            for (const dayKey in attendanceMap[user.userid] || {}) {
+                                                const dailyData = attendanceMap[user.userid][dayKey];
+                                                if (dailyData && dailyData.records.length > 0) {
+                                                    const recordWorkDate = dailyData.records[0].workDate;
+                                                    const recordDate = typeof recordWorkDate === 'string' && recordWorkDate.includes('-')
+                                                        ? new Date(recordWorkDate.split('T')[0].split('-').map(Number).map((n, i) => i === 1 ? n - 1 : n) as any)
+                                                        : new Date(recordWorkDate);
+                                                    
+                                                    if (recordDate.getFullYear() === targetYear && 
+                                                        recordDate.getMonth() === targetMonth && 
+                                                        recordDate.getDate() === targetDay) {
+                                                        targetDayAttendance = dailyData;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            
+                                            if (targetDayAttendance) {
+                                                const offDutyRecords = targetDayAttendance.records.filter(r => 
+                                                    r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                                );
+                                                if (offDutyRecords.length > 0) {
+                                                    // 取最晚的下班打卡
+                                                    const latestOffDuty = offDutyRecords.reduce((latest, current) => {
+                                                        return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                                    });
+                                                    return new Date(latestOffDuty.userCheckTime);
+                                                }
+                                            }
+                                            
+                                            return undefined;
+                                        };
+                                        
+                                        // 查找前一天的下班打卡时间（用于跨天规则）
+                                        let previousDayCheckoutTime: Date | undefined;
                                         const yesterday = new Date(dayDate);
                                         yesterday.setDate(dayDate.getDate() - 1);
                                         const yesterdayAttendance = attendanceMap[user.userid]?.[yesterday.getDate()];
                                         if (yesterdayAttendance) {
-                                            const approveOffDuty = yesterdayAttendance.records.find(r => r.checkType === 'OffDuty' && r.sourceType === 'APPROVE');
-                                            if (approveOffDuty) {
-                                                const offTime = new Date(approveOffDuty.userCheckTime);
-                                                const limit2030 = new Date(offTime);
-                                                limit2030.setHours(20, 30, 0, 0);
-                                                if (offTime.getTime() >= limit2030.getTime()) yesterdayApprove2030 = true;
+                                            const offDutyRecords = yesterdayAttendance.records.filter(r => 
+                                                r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                            );
+                                            if (offDutyRecords.length > 0) {
+                                                // 取最晚的下班打卡
+                                                const latestOffDuty = offDutyRecords.reduce((latest, current) => {
+                                                    return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                                });
+                                                previousDayCheckoutTime = new Date(latestOffDuty.userCheckTime);
                                             }
                                         }
-
-                                        const firstDayOnJob = new Date(user.create_time).getDate();
-                                        const firstMonthOnJob = new Date(user.create_time).getMonth();
-                                        const firstYearOnJob = new Date(user.create_time).getFullYear();
-                                        const isFirstDayOnJob = year === firstYearOnJob && monthIndex === firstMonthOnJob && day === firstDayOnJob;
-
-                                        const findLastOffDuty = (currentDate: Date): Date | null => {
-                                            for (let d = currentDate.getDate() - 1; d >= 1; d--) {
-                                                const attendance = attendanceMap[user.userid]?.[String(d)];
-                                                if (attendance) {
-                                                    const offRecord = attendance.records.find(r => r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned');
-                                                    if (offRecord) return new Date(offRecord.userCheckTime);
+                                        
+                                        // 🔥 查找上周末或周五的下班打卡时间（用于跨周规则，仅周一需要）
+                                        let previousWeekendCheckoutTime: Date | undefined;
+                                        if (dayDate.getDay() === 1) { // 周一
+                                            const { saturday, sunday } = ruleEngine.getPreviousWeekend(dayDate);
+                                            
+                                            // 查找周五的日期
+                                            const friday = new Date(dayDate);
+                                            friday.setDate(friday.getDate() - 3); // 周一 - 3 = 周五
+                                            
+                                            // 🔥 跨周规则已合并到 crossDayCheckout 中，默认查找周五/周六/周日
+                                            // 优先级：周日 > 周六 > 周五
+                                            const includeWeekend = true; // 默认包含周末
+                                            
+                                            if (includeWeekend) {
+                                                // 开启周末加班：优先级 周日 > 周六 > 周五
+                                                // 1. 优先查找周日的打卡
+                                                const sundayAttendance = attendanceMap[user.userid]?.[sunday.getDate()];
+                                                if (sundayAttendance) {
+                                                    const sundayOffDuty = sundayAttendance.records.filter(r => 
+                                                        r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                                    );
+                                                    if (sundayOffDuty.length > 0) {
+                                                        const latestSundayOffDuty = sundayOffDuty.reduce((latest, current) => {
+                                                            return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                                        });
+                                                        previousWeekendCheckoutTime = new Date(latestSundayOffDuty.userCheckTime);
+                                                    }
+                                                }
+                                                
+                                                // 2. 如果周日没有打卡，查找周六
+                                                if (!previousWeekendCheckoutTime) {
+                                                    const saturdayAttendance = attendanceMap[user.userid]?.[saturday.getDate()];
+                                                    if (saturdayAttendance) {
+                                                        const saturdayOffDuty = saturdayAttendance.records.filter(r => 
+                                                            r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                                        );
+                                                        if (saturdayOffDuty.length > 0) {
+                                                            const latestSaturdayOffDuty = saturdayOffDuty.reduce((latest, current) => {
+                                                                return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                                            });
+                                                            previousWeekendCheckoutTime = new Date(latestSaturdayOffDuty.userCheckTime);
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                // 3. 如果周末都没有打卡，查找周五
+                                                if (!previousWeekendCheckoutTime) {
+                                                    const fridayAttendance = attendanceMap[user.userid]?.[friday.getDate()];
+                                                    if (fridayAttendance) {
+                                                        const fridayOffDuty = fridayAttendance.records.filter(r => 
+                                                            r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                                        );
+                                                        if (fridayOffDuty.length > 0) {
+                                                            const latestFridayOffDuty = fridayOffDuty.reduce((latest, current) => {
+                                                                return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                                            });
+                                                            previousWeekendCheckoutTime = new Date(latestFridayOffDuty.userCheckTime);
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                // 默认：只查找周五的打卡
+                                                const fridayAttendance = attendanceMap[user.userid]?.[friday.getDate()];
+                                                if (fridayAttendance) {
+                                                    const fridayOffDuty = fridayAttendance.records.filter(r => 
+                                                        r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                                    );
+                                                    if (fridayOffDuty.length > 0) {
+                                                        const latestFridayOffDuty = fridayOffDuty.reduce((latest, current) => {
+                                                            return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                                        });
+                                                        previousWeekendCheckoutTime = new Date(latestFridayOffDuty.userCheckTime);
+                                                    }
                                                 }
                                             }
-                                            return null;
                                         }
-                                        lastFridayOffDutyTime = findLastOffDuty(dayDate);
-
-                                        const lateRecord = statusData?.records.find(r => r.timeResult === 'Late');
-                                        const lateMinutes = lateRecord ? getLateMinutes(lateRecord, processDetail, lastFridayOffDutyTime, yesterdayApprove2030, isFirstDayOnJob, holidays) : 0;
+                                        
+                                        // 🔥 查找上月最后一个工作日的下班打卡时间（用于跨月规则）
+                                        let previousMonthCheckoutTime: Date | undefined;
+                                        
+                                        // 🔥 判断当前日期是否是本月第一个工作日（使用规则引擎的方法）
+                                        // 注意：不能简单使用 day === 1，因为1号可能是周末或节假日
+                                        const isFirstWorkdayOfMonth = (() => {
+                                            // 首先检查当前日期是否是工作日
+                                            if (!isWorkday) return false;
+                                            
+                                            // 检查当前日期之前是否有工作日
+                                            for (let d = 1; d < day; d++) {
+                                                const checkDate = new Date(year, monthIndex, d);
+                                                const checkDayOfWeek = checkDate.getDay();
+                                                const checkIsWeekend = checkDayOfWeek === 0 || checkDayOfWeek === 6;
+                                                const checkDateKey = `${String(monthIndex + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                                                const checkHolidayInfo = holidays?.[checkDateKey];
+                                                
+                                                let checkIsWorkday = !checkIsWeekend;
+                                                if (checkHolidayInfo) {
+                                                    if (checkHolidayInfo.holiday === false) checkIsWorkday = true;
+                                                    else if (checkHolidayInfo.holiday === true) checkIsWorkday = false;
+                                                }
+                                                
+                                                if (checkIsWorkday) return false; // 找到了更早的工作日
+                                            }
+                                            return true; // 当前日期是本月第一个工作日
+                                        })();
+                                        
+                                        if (isFirstWorkdayOfMonth) {
+                                            // 🔥 修复：直接从用户的所有打卡记录中查找上月最后一条下班打卡
+                                            // 这与 useAttendanceStats 中的逻辑保持一致
+                                            const previousMonth = monthIndex === 0 ? 11 : monthIndex - 1;
+                                            const previousYear = monthIndex === 0 ? year - 1 : year;
+                                            
+                                            let lastMonthCheckouts: Array<{ date: Date; record: any }> = [];
+                                            
+                                            // 遍历用户的所有打卡记录
+                                            if (user.punchData && user.punchData.length > 0) {
+                                                user.punchData.forEach(record => {
+                                                    const recordDate = new Date(record.workDate);
+                                                    const recordYear = recordDate.getFullYear();
+                                                    const recordMonth = recordDate.getMonth();
+                                                    
+                                                    // 只看上个月的下班打卡
+                                                    if (recordYear === previousYear && recordMonth === previousMonth) {
+                                                        if (record.checkType === 'OffDuty' && record.timeResult !== 'NotSigned') {
+                                                            lastMonthCheckouts.push({
+                                                                date: new Date(record.userCheckTime),
+                                                                record: record
+                                                            });
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                            
+                                            // 如果找到了上个月的下班打卡，取最晚的一条
+                                            if (lastMonthCheckouts.length > 0) {
+                                                const latestCheckout = lastMonthCheckouts.reduce((latest, current) => {
+                                                    return current.date > latest.date ? current : latest;
+                                                });
+                                                previousMonthCheckoutTime = latestCheckout.date;
+                                            } else {
+                                                // 如果上个月没有任何下班打卡记录，默认使用18:30
+                                                const lastDayOfPreviousMonth = new Date(year, monthIndex, 0).getDate();
+                                                previousMonthCheckoutTime = new Date(previousYear, previousMonth, lastDayOfPreviousMonth, 18, 30, 0);
+                                            }
+                                        }
+                                        
+                                        // 🔥 使用规则引擎计算迟到分钟数（传入 holidayMap 用于判断工作日）
+                                        const lateRecord = statusData?.records.find(r => r.checkType === 'OnDuty' && r.timeResult === 'Late');
+                                        const lateMinutes = lateRecord ? ruleEngine.calculateLateMinutes(
+                                            lateRecord,
+                                            dayDate,
+                                            previousDayCheckoutTime,
+                                            previousWeekendCheckoutTime,
+                                            previousMonthCheckoutTime,
+                                            holidays, // 🔥 传入节假日映射
+                                            processDetail, // 🔥 新增：传入请假/调休审批详情
+                                            user.name, // 🔥 传入员工名字用于日志
+                                            lookbackCheckoutFinder // 🔥 传入向前查询回调函数
+                                        ) : 0;
 
                                         let isMissing = statusData?.status === 'incomplete' || statusData?.records.some(r => r.timeResult === 'NotSigned');
 

@@ -89,21 +89,13 @@ export interface FullAttendanceRuleConfig {
   // 出勤天数配置
   attend_days_enabled: boolean;
   should_attend_calc: 'workdays' | 'fixed' | 'custom';
-  fixed_should_days: number | null;
-  include_holidays_in_should: boolean; // 应出勤天数是否包含法定节假日
+  fixed_should_attendance_days: number | null;
+  exclude_holidays: boolean;
+  exclude_weekends: boolean;
   count_late_as_attend: boolean;
   count_missing_as_attend: boolean;
   count_half_leave_as_half: boolean;
   min_hours_for_full_day: number;
-  // 正常出勤天数计算规则 - 以下类型算正常出勤
-  count_holiday_as_attend: boolean; // 法定节假日算出勤
-  count_comp_time_as_attend: boolean; // 调休算出勤
-  count_paid_leave_as_attend: boolean; // 带薪福利假算出勤
-  count_trip_as_attend: boolean; // 出差算出勤
-  count_out_as_attend: boolean; // 外出算出勤
-  // 正常出勤天数计算规则 - 以下类型不算正常出勤
-  count_sick_as_attend: boolean; // 病假是否算出勤
-  count_personal_as_attend: boolean; // 事假是否算出勤
   
   // 调班配置
   workday_swap_enabled: boolean;
@@ -220,17 +212,19 @@ class AttendanceRuleApiService {
 
   /**
    * 更新完整配置
+   * 新的后端格式：{ rules: AttendanceRuleConfig, changeReason?: string }
    */
   async updateFullConfig(
     companyId: CompanyId,
-    data: Partial<FullAttendanceRuleConfig> & { changeReason?: string }
+    rules: any, // 前端格式的 AttendanceRuleConfig
+    changeReason?: string
   ): Promise<{ id: number; version: number } | null> {
     try {
       const response = await this.request<{ id: number; version: number }>(
         `/api/v1/attendance/rules/${companyId}`,
         {
           method: 'PUT',
-          body: JSON.stringify(data),
+          body: JSON.stringify({ rules, changeReason }),
         }
       );
       

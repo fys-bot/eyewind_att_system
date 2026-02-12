@@ -25,7 +25,7 @@ export class AttendanceRuleEngine {
         if (!config.rules) {
             throw new Error(`No attendance rules found for company: ${this.companyKey}`);
         }
-        console.log(`[AttendanceRuleEngine] 加载 ${this.companyKey} 规则配置`);
+        
         return config.rules;
     }
 
@@ -38,7 +38,6 @@ export class AttendanceRuleEngine {
             if (config.rules) {
                 this.rules = config.rules;
                 this.isInitialized = true;
-                console.log(`[AttendanceRuleEngine] 已从数据库加载 ${this.companyKey} 规则`);
             }
         } catch (e) {
             console.warn(`[AttendanceRuleEngine] 异步加载规则失败，使用同步加载的规则:`, e);
@@ -60,6 +59,76 @@ export class AttendanceRuleEngine {
     }
 
     /**
+     * 判断指定日期是否是本月第一个工作日
+     * @param date 要检查的日期
+     * @param holidayMap 节假日映射（可选）
+     * @returns 是否是本月第一个工作日
+     */
+    private isFirstWorkdayOfMonth(date: Date, holidayMap?: Record<string, any>): boolean {
+        const year = date.getFullYear();
+        const month = date.getMonth();
+        const day = date.getDate();
+        const dayOfWeek = date.getDay();
+        
+        // 首先检查当前日期是否是工作日
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const dateKey = `${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        
+        let isCurrentDayWorkday = !isWeekend;
+        if (holidayMap && holidayMap[dateKey]) {
+            if (holidayMap[dateKey].holiday === false) {
+                isCurrentDayWorkday = true; // 补班日
+            } else if (holidayMap[dateKey].holiday === true) {
+                isCurrentDayWorkday = false; // 法定节假日
+            }
+        }
+        
+        // 🔥 调试：记录判断过程
+        if (month === 1 && day <= 3) {
+            // console.log(`[isFirstWorkdayOfMonth] 检查 ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}, 星期${dayOfWeek}, isWeekend=${isWeekend}, isCurrentDayWorkday=${isCurrentDayWorkday}`);
+        }
+        
+        // 如果当前日期不是工作日，直接返回 false
+        if (!isCurrentDayWorkday) {
+            if (month === 1 && day <= 3) {
+                // console.log(`[isFirstWorkdayOfMonth] 当前日期不是工作日，返回 false`);
+            }
+            return false;
+        }
+        
+        // 检查当前日期之前是否有工作日
+        for (let d = 1; d < day; d++) {
+            const checkDate = new Date(year, month, d);
+            const checkDayOfWeek = checkDate.getDay();
+            const checkIsWeekend = checkDayOfWeek === 0 || checkDayOfWeek === 6;
+            const checkDateKey = `${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            
+            let isWorkday = !checkIsWeekend;
+            if (holidayMap && holidayMap[checkDateKey]) {
+                if (holidayMap[checkDateKey].holiday === false) {
+                    isWorkday = true; // 补班日
+                } else if (holidayMap[checkDateKey].holiday === true) {
+                    isWorkday = false; // 法定节假日
+                }
+            }
+            
+            // 如果找到了更早的工作日，说明当前日期不是第一个工作日
+            if (isWorkday) {
+                if (month === 1 && day <= 3) {
+                    // console.log(`[isFirstWorkdayOfMonth] 找到更早的工作日: ${d}日，返回 false`);
+                }
+                return false;
+            }
+        }
+        
+        // 当前日期之前没有工作日，说明是本月第一个工作日
+        if (month === 1 && day <= 3) {
+            // console.log(`[isFirstWorkdayOfMonth] 当前日期是本月第一个工作日，返回 true`);
+        }
+        return true;
+    }
+
+    /**
      * 获取当前规则配置
      */
     public getRules(): AttendanceRuleConfig {
@@ -67,59 +136,362 @@ export class AttendanceRuleEngine {
     }
 
     /**
-     * 计算迟到分钟数（基于新的复杂规则）
+     * 计算迟到分钟数（基于统一的跨天打卡规则）
+     * 
+     * @param record 打卡记录
+     * @param workDate 工作日期
+     * @param previousDayCheckoutTime 前一天的下班打卡时间（用于跨天规则）
+     * @param previousWeekendCheckoutTime 周五/周六/周日的下班打卡时间（用于跨周规则）
+     * @param previousMonthCheckoutTime 上月最后一个工作日的下班打卡时间（用于跨月规则）
+     * @param holidayMap 节假日映射（可选，用于判断工作日）
+     * @param processDetail 请假/调休审批详情（可选，用于判断请假时段）
+     * @param userName 员工姓名（用于日志）
+     * @param lookbackCheckoutFinder 向前查询下班打卡的回调函数（可选，用于启用向前查询功能）
      */
     public calculateLateMinutes(
         record: PunchRecord,
         workDate: Date,
-        previousDayCheckoutTime?: Date
+        previousDayCheckoutTime?: Date,
+        previousWeekendCheckoutTime?: Date,
+        previousMonthCheckoutTime?: Date,
+        holidayMap?: Record<string, any>,
+        processDetail?: any,
+        userName?: string,
+        lookbackCheckoutFinder?: (daysBack: number) => Date | undefined
     ): number {
+        // 基础校验：只处理上班打卡且迟到的记录
         if (record.checkType !== 'OnDuty' || record.timeResult !== 'Late') {
             return 0;
         }
 
-        const checkInTime = new Date(record.userCheckTime);
-        
-        // 应用复杂迟到规则 - 基于绝对时间阈值
-        if (this.rules.lateRules && this.rules.lateRules.length > 0 && previousDayCheckoutTime) {
-            for (const rule of this.rules.lateRules) {
-                // 处理24:00的特殊情况
-                let ruleHour: number, ruleMinute: number;
-                if (rule.previousDayCheckoutTime === "24:00") {
-                    ruleHour = 24;
-                    ruleMinute = 0;
-                } else {
-                    [ruleHour, ruleMinute] = rule.previousDayCheckoutTime.split(':').map(Number);
-                }
-                
-                const ruleTime = new Date(previousDayCheckoutTime);
-                if (ruleHour === 24) {
-                    // 24:00表示次日0:00
-                    ruleTime.setDate(ruleTime.getDate() + 1);
-                    ruleTime.setHours(0, 0, 0, 0);
-                } else {
-                    ruleTime.setHours(ruleHour, ruleMinute, 0, 0);
-                }
+        // // 🔥 调试：记录规则引擎的配置
+        // const debugMonth = workDate.getMonth();
+        // const debugDay = workDate.getDate();
+        // if (debugMonth === 1 && debugDay === 1) {
+        //     console.log(`[AttendanceRuleEngine] 规则引擎配置:`, {
+        //         enabled: this.rules.crossDayCheckout?.enabled,
+        //         rulesCount: this.rules.crossDayCheckout?.rules?.length,
+        //         rules: this.rules.crossDayCheckout?.rules?.map(r => ({ 
+        //             checkoutTime: r.checkoutTime, 
+        //             nextCheckinTime: r.nextCheckinTime, 
+        //             applyTo: r.applyTo,
+        //             description: r.description 
+        //         }))
+        //     });
+        // }
 
-                // 如果前一天打卡时间符合规则条件
-                if (previousDayCheckoutTime.getTime() >= ruleTime.getTime()) {
-                    // 使用该规则的绝对时间阈值
-                    const [thresholdHour, thresholdMinute] = rule.lateThresholdTime.split(':').map(Number);
-                    const thresholdTime = new Date(workDate);
-                    thresholdTime.setHours(thresholdHour, thresholdMinute, 0, 0);
-                    
-                    // 计算相对于阈值时间的迟到分钟数
-                    return Math.max(0, Math.floor((checkInTime.getTime() - thresholdTime.getTime()) / 60000));
+        const checkInTime = new Date(record.userCheckTime);
+        const dayOfWeek = workDate.getDay(); // 0=周日, 1=周一, ..., 6=周六
+        
+        // 🔥 优先级1: 判断是否是本月第一个工作日 → 应用跨月规则
+        const isFirstWorkdayOfMonth = this.isFirstWorkdayOfMonth(workDate, holidayMap);
+        
+        // 🔥 调试：只记录徐怡的判断
+        const month = workDate.getMonth();
+        const day = workDate.getDate();
+        if (userName === '徐怡' && month === 1 && day <= 3) {
+            console.log(`[AttendanceRuleEngine] 跨月规则判断: ${workDate.toISOString().split('T')[0]}, isFirstWorkdayOfMonth=${isFirstWorkdayOfMonth}, previousMonthCheckoutTime=${previousMonthCheckoutTime ? '存在' : '不存在'}, 用户: ${userName}`);
+        }
+        
+        if (isFirstWorkdayOfMonth && previousMonthCheckoutTime) {
+            const lateMinutes = this.applyLateRulesForCrossDay(
+                checkInTime, 
+                workDate, 
+                previousMonthCheckoutTime, 
+                'month', 
+                processDetail, 
+                userName
+            );
+            if (lateMinutes !== null) {
+                return lateMinutes;
+            }
+        }
+        
+        // 🔥 优先级2: 判断是否是周一 → 应用跨周规则
+        if (dayOfWeek === 1 && previousWeekendCheckoutTime) {
+            const lateMinutes = this.applyLateRulesForCrossDay(
+                checkInTime, 
+                workDate, 
+                previousWeekendCheckoutTime, 
+                'week', 
+                processDetail, 
+                userName
+            );
+            if (lateMinutes !== null) {
+                return lateMinutes;
+            }
+        }
+        
+        // 🔥 优先级3: 普通工作日 → 应用跨天规则（支持向前查询）
+        let effectivePreviousDayCheckoutTime = previousDayCheckoutTime;
+        
+        // 🔥 向前查询功能：如果启用了向前查询且昨天没有下班打卡，继续查找前几天
+        if (!effectivePreviousDayCheckoutTime && 
+            this.rules.crossDayCheckout?.enableLookback && 
+            lookbackCheckoutFinder) {
+            
+            const maxLookbackDays = this.rules.crossDayCheckout.lookbackDays || 10;
+            
+            for (let daysBack = 2; daysBack <= maxLookbackDays; daysBack++) {
+                const foundCheckoutTime = lookbackCheckoutFinder(daysBack);
+                if (foundCheckoutTime) {
+                    effectivePreviousDayCheckoutTime = foundCheckoutTime;
+                    break;
                 }
             }
         }
+        
+        if (effectivePreviousDayCheckoutTime) {
+            const lateMinutes = this.applyLateRulesForCrossDay(
+                checkInTime, 
+                workDate, 
+                effectivePreviousDayCheckoutTime, 
+                'day', 
+                processDetail, 
+                userName
+            );
+            if (lateMinutes !== null) {
+                return lateMinutes;
+            }
+        }
+        
+        // 🔥 默认：使用标准工作开始时间计算迟到
+        return this.calculateDefaultLateMinutes(checkInTime, workDate, processDetail);
+    }
 
-        // 如果没有匹配的规则，使用默认的工作开始时间
-        const workStartTime = new Date(workDate);
+    /**
+     * 🔥 新的跨天打卡规则应用方法 - 使用 lateRules 配置
+     * 根据场景（day/week/month）和前一时段的下班时间，从 lateRules 中查找匹配的规则
+     */
+    private applyLateRulesForCrossDay(
+        checkInTime: Date,
+        workDate: Date,
+        previousCheckoutTime: Date,
+        scenario: 'day' | 'week' | 'month',
+        processDetail?: any,
+        userName?: string
+    ): number | null {
+        const scenarioName = scenario === 'day' ? '跨天' : scenario === 'week' ? '跨周' : '跨月';
+        
+        // 🔥 只记录徐怡的日志
+        if (userName === '徐怡') {
+            console.log(`[AttendanceRuleEngine] 检查${scenarioName}打卡规则: ${workDate.toISOString().split('T')[0]}, 前一时段下班: ${previousCheckoutTime.toISOString()}, 员工: ${userName}`);
+        }
+        
+        // 检查规则是否启用
+        if (!this.rules.crossDayCheckout?.enabled) {
+            return null;
+        }
+        
+        // 检查是否有 lateRules 配置
+        if (!this.rules.lateRules || this.rules.lateRules.length === 0) {
+            if (userName === '徐怡') {
+                console.log(`[AttendanceRuleEngine] 没有配置 lateRules，无法应用${scenarioName}规则`);
+            }
+            return null;
+        }
+        
+        // 🔥 按 previousDayCheckoutTime 从晚到早排序（确保优先匹配最晚的规则）
+        const sortedRules = [...this.rules.lateRules].sort((a, b) => 
+            this.parseTime(b.previousDayCheckoutTime) - this.parseTime(a.previousDayCheckoutTime)
+        );
+        
+        if (userName === '徐怡') {
+            console.log(`[AttendanceRuleEngine] ${scenarioName}规则筛选结果:`, sortedRules.map(r => ({ 
+                previousDayCheckoutTime: r.previousDayCheckoutTime, 
+                lateThresholdTime: r.lateThresholdTime, 
+                description: r.description 
+            })));
+        }
+        
+        // 找到第一个匹配的规则
+        for (const rule of sortedRules) {
+            const ruleTime = this.parseRuleTime(previousCheckoutTime, rule.previousDayCheckoutTime);
+            
+            // 🔥 只记录徐怡的时间比较
+            if (userName === '徐怡') {
+                console.log(`[AttendanceRuleEngine] ${scenarioName}规则匹配: 规则=${rule.previousDayCheckoutTime}, 规则时间=${ruleTime.toISOString()}, 实际下班=${previousCheckoutTime.toISOString()}, 比较结果=${previousCheckoutTime.getTime() >= ruleTime.getTime()}`);
+            }
+            
+            // 如果前一时段的下班时间 >= 规则阈值时间
+            if (previousCheckoutTime.getTime() >= ruleTime.getTime()) {
+                let thresholdTime = this.parseThresholdTime(workDate, rule.lateThresholdTime);
+                
+                // 🔥 如果有请假/调休，检查请假结束时间
+                if (processDetail && processDetail.formValues) {
+                    const leaveEndTime = processDetail.formValues.endTime || processDetail.formValues.end;
+                    if (leaveEndTime) {
+                        const leaveEnd = new Date(leaveEndTime);
+                        const adjustedThreshold = this.adjustThresholdForLunchBreak(leaveEnd, workDate);
+                        
+                        if (adjustedThreshold.getTime() > thresholdTime.getTime()) {
+                            thresholdTime = adjustedThreshold;
+                            if (userName === '徐怡') {
+                                console.log(`[AttendanceRuleEngine] 检测到请假结束时间，调整后的迟到基准: ${thresholdTime.toISOString()}`);
+                            }
+                        }
+                    }
+                }
+                
+                const lateMinutes = Math.max(0, Math.floor((checkInTime.getTime() - thresholdTime.getTime()) / 60000));
+                if (userName === '徐怡') {
+                    console.log(`[AttendanceRuleEngine] 应用${scenarioName}规则: ${rule.previousDayCheckoutTime}→${rule.lateThresholdTime}, 迟到${lateMinutes}分钟`);
+                }
+                return lateMinutes;
+            }
+        }
+        
+        if (userName === '徐怡') {
+            console.log(`[AttendanceRuleEngine] 前一时段下班时间未达到任何${scenarioName}规则阈值`);
+        }
+        return null;
+    }
+
+    /**
+     * 应用传统迟到规则（兼容旧逻辑）
+     * @deprecated 已废弃，现在使用 applyLateRulesForCrossDay 方法
+     */
+    private applyLegacyLateRule(
+        checkInTime: Date,
+        workDate: Date,
+        previousDayCheckoutTime: Date,
+        processDetail?: any
+    ): number | null {
+        for (const rule of this.rules.lateRules) {
+            const ruleTime = this.parseRuleTime(previousDayCheckoutTime, rule.previousDayCheckoutTime);
+            
+            // 如果前一天打卡时间符合规则条件
+            if (previousDayCheckoutTime.getTime() >= ruleTime.getTime()) {
+                let thresholdTime = this.parseThresholdTime(workDate, rule.lateThresholdTime);
+                
+                // 🔥 新增：如果有请假/调休，检查请假结束时间
+                if (processDetail && processDetail.formValues) {
+                    const leaveEndTime = processDetail.formValues.endTime || processDetail.formValues.end;
+                    if (leaveEndTime) {
+                        const leaveEnd = new Date(leaveEndTime);
+                        
+                        // 🔥 智能判断：如果请假结束时间在午休时间范围内，使用午休结束时间
+                        const adjustedThreshold = this.adjustThresholdForLunchBreak(leaveEnd, workDate);
+                        
+                        // 如果调整后的时间晚于规则阈值时间，使用调整后的时间作为基准
+                        if (adjustedThreshold.getTime() > thresholdTime.getTime()) {
+                            thresholdTime = adjustedThreshold;
+                            // console.log(`[AttendanceRuleEngine] 检测到请假结束时间: ${leaveEndTime}, 调整后的迟到基准: ${thresholdTime.toISOString()}`);
+                        }
+                    }
+                }
+                
+                const lateMinutes = Math.max(0, Math.floor((checkInTime.getTime() - thresholdTime.getTime()) / 60000));
+                
+                // console.log(`[AttendanceRuleEngine] 应用传统规则: ${rule.previousDayCheckoutTime}→${rule.lateThresholdTime}, 迟到${lateMinutes}分钟`);
+                return lateMinutes;
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * 计算默认迟到分钟数（使用标准工作开始时间）
+     */
+    private calculateDefaultLateMinutes(checkInTime: Date, workDate: Date, processDetail?: any): number {
+        let workStartTime = new Date(workDate);
         const [startHour, startMinute] = this.rules.workStartTime.split(':').map(Number);
         workStartTime.setHours(startHour, startMinute, 0, 0);
+        
+        // 🔥 新增：如果有请假/调休，检查请假结束时间
+        if (processDetail && processDetail.formValues) {
+            const leaveEndTime = processDetail.formValues.endTime || processDetail.formValues.end;
+            if (leaveEndTime) {
+                const leaveEnd = new Date(leaveEndTime);
+                
+                // 🔥 智能判断：如果请假结束时间在午休时间范围内，使用午休结束时间
+                const adjustedThreshold = this.adjustThresholdForLunchBreak(leaveEnd, workDate);
+                
+                // 如果调整后的时间晚于标准工作开始时间，使用调整后的时间作为基准
+                if (adjustedThreshold.getTime() > workStartTime.getTime()) {
+                    workStartTime = adjustedThreshold;
+                    // console.log(`[AttendanceRuleEngine] 检测到请假结束时间: ${leaveEndTime}, 调整后的迟到基准: ${workStartTime.toISOString()}`);
+                }
+            }
+        }
+        
+        const lateMinutes = Math.max(0, Math.floor((checkInTime.getTime() - workStartTime.getTime()) / 60000));
+        // console.log(`[AttendanceRuleEngine] 使用默认工作时间: ${this.rules.workStartTime}, 迟到${lateMinutes}分钟`);
+        return lateMinutes;
+    }
 
-        return Math.max(0, Math.floor((checkInTime.getTime() - workStartTime.getTime()) / 60000));
+    /**
+     * 解析规则时间（处理24:00等特殊情况）
+     */
+    private parseRuleTime(baseDate: Date, timeStr: string): Date {
+        const [hour, minute] = timeStr.split(':').map(Number);
+        const ruleTime = new Date(baseDate);
+        
+        if (hour === 24) {
+            // 🔥 修复：24:00 应该表示当天的24点（即次日0点），但不应该再加一天
+            // 因为 baseDate (previousCheckoutTime) 可能已经是UTC时间的次日了
+            // 例如：北京时间 2026-02-01 00:00:22 = UTC 2026-01-31 16:00:22
+            // 我们应该将规则时间设置为 UTC 2026-01-31 16:00:00（北京时间 2026-02-01 00:00:00）
+            ruleTime.setHours(0, minute || 0, 0, 0);
+        } else {
+            ruleTime.setHours(hour, minute || 0, 0, 0);
+        }
+        
+        return ruleTime;
+    }
+
+    /**
+     * 解析阈值时间
+     */
+    private parseThresholdTime(baseDate: Date, timeStr: string): Date {
+        // 🔥 防御性检查
+        if (!timeStr) {
+            console.error('[AttendanceRuleEngine] parseThresholdTime: timeStr is undefined or null');
+            // 返回默认的工作开始时间
+            const defaultTime = new Date(baseDate);
+            const [hour, minute] = this.rules.workStartTime.split(':').map(Number);
+            defaultTime.setHours(hour, minute || 0, 0, 0);
+            return defaultTime;
+        }
+        
+        const [hour, minute] = timeStr.split(':').map(Number);
+        const thresholdTime = new Date(baseDate);
+        thresholdTime.setHours(hour, minute || 0, 0, 0);
+        return thresholdTime;
+    }
+
+    /**
+     * 🔥 智能调整请假结束时间：如果请假结束时间在午休时间范围内，使用午休结束时间
+     * 
+     * 场景：员工请假上午9:00-12:00
+     * - 请假结束时间：12:00
+     * - 午休时间：12:00-13:30
+     * - 应该使用：13:30（午休结束时间）作为迟到基准
+     * 
+     * @param leaveEndTime 请假结束时间
+     * @param workDate 工作日期
+     * @returns 调整后的阈值时间
+     */
+    private adjustThresholdForLunchBreak(leaveEndTime: Date, workDate: Date): Date {
+        // 获取午休时间配置
+        const [lunchStartHour, lunchStartMinute] = this.rules.lunchStartTime.split(':').map(Number);
+        const [lunchEndHour, lunchEndMinute] = this.rules.lunchEndTime.split(':').map(Number);
+        
+        const lunchStart = new Date(workDate);
+        lunchStart.setHours(lunchStartHour, lunchStartMinute, 0, 0);
+        
+        const lunchEnd = new Date(workDate);
+        lunchEnd.setHours(lunchEndHour, lunchEndMinute, 0, 0);
+        
+        // 检查请假结束时间是否在午休时间范围内（包括边界）
+        if (leaveEndTime.getTime() >= lunchStart.getTime() && leaveEndTime.getTime() <= lunchEnd.getTime()) {
+            // console.log(`[AttendanceRuleEngine] 请假结束时间 ${leaveEndTime.toISOString()} 在午休时间范围内 [${this.rules.lunchStartTime}-${this.rules.lunchEndTime}]，使用午休结束时间`);
+            return lunchEnd;
+        }
+        
+        // 如果不在午休时间范围内，直接返回请假结束时间
+        return leaveEndTime;
     }
 
     /**
@@ -407,6 +779,153 @@ export class AttendanceRuleEngine {
      */
     public isCrossDayCheckoutEnabled(): boolean {
         return this.rules.crossDayCheckout?.enabled || false;
+    }
+    
+    /**
+     * 🔥 检查是否启用跨周打卡
+     */
+    public isCrossWeekCheckoutEnabled(): boolean {
+        return this.rules.crossDayCheckout?.enabled || false;
+    }
+    
+    /**
+     * 🔥 检查是否启用跨月打卡
+     */
+    public isCrossMonthCheckoutEnabled(): boolean {
+        return this.rules.crossDayCheckout?.enabled || false;
+    }
+    
+    /**
+     * 🔥 获取前一个工作日的日期
+     * @param currentDate 当前日期
+     * @param holidayMap 节假日映射（可选）
+     * @returns 前一个工作日的日期
+     */
+    public getPreviousWorkday(currentDate: Date, holidayMap?: Record<string, any>): Date {
+        const previousDay = new Date(currentDate);
+        previousDay.setDate(previousDay.getDate() - 1);
+        
+        // 如果前一天是周末，继续往前找
+        while (previousDay.getDay() === 0 || previousDay.getDay() === 6) {
+            previousDay.setDate(previousDay.getDate() - 1);
+        }
+        
+        // 如果提供了节假日映射，检查是否是节假日
+        if (holidayMap) {
+            const dateStr = previousDay.toISOString().split('T')[0];
+            if (holidayMap[dateStr]?.holiday) {
+                // 递归查找前一个工作日
+                return this.getPreviousWorkday(previousDay, holidayMap);
+            }
+        }
+        
+        return previousDay;
+    }
+    
+    /**
+     * 🔥 获取上周末（周六或周日）的日期
+     * @param currentDate 当前日期（应该是周一）
+     * @returns 上周末的日期（优先返回周日，如果周日没有打卡则返回周六）
+     */
+    public getPreviousWeekend(currentDate: Date): { saturday: Date; sunday: Date } {
+        const dayOfWeek = currentDate.getDay();
+        
+        // 如果不是周一，返回null
+        if (dayOfWeek !== 1) {
+            throw new Error('getPreviousWeekend should only be called on Monday');
+        }
+        
+        const sunday = new Date(currentDate);
+        sunday.setDate(sunday.getDate() - 1); // 周一 - 1 = 周日
+        
+        const saturday = new Date(currentDate);
+        saturday.setDate(saturday.getDate() - 2); // 周一 - 2 = 周六
+        
+        return { saturday, sunday };
+    }
+    
+    /**
+     * 🔥 获取上个月最后一天的日期
+     * @param currentDate 当前日期（应该是本月第一天）
+     * @returns 上个月最后一天的日期
+     */
+    public getPreviousMonthLastDay(currentDate: Date): Date {
+        const lastDayOfPreviousMonth = new Date(currentDate);
+        lastDayOfPreviousMonth.setDate(0); // 设置为上个月最后一天
+        return lastDayOfPreviousMonth;
+    }
+    
+    /**
+     * 🔥 获取上个月最后一个工作日的日期
+     * @param currentDate 当前日期（应该是本月第一天或第一个工作日）
+     * @param holidayMap 节假日映射（可选）
+     * @returns 上个月最后一个工作日的日期，如果没有则返回null
+     */
+    public getPreviousMonthLastWorkday(currentDate: Date, holidayMap?: Record<string, any>): Date | null {
+        const lastDayOfPreviousMonth = this.getPreviousMonthLastDay(currentDate);
+        const year = lastDayOfPreviousMonth.getFullYear();
+        const month = lastDayOfPreviousMonth.getMonth();
+        const lastDay = lastDayOfPreviousMonth.getDate();
+        
+        // 从上月最后一天开始往前找，找到第一个工作日
+        for (let d = lastDay; d >= 1; d--) {
+            const checkDate = new Date(year, month, d);
+            const dayOfWeek = checkDate.getDay();
+            const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+            const dateKey = `${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            
+            let isWorkday = !isWeekend;
+            if (holidayMap && holidayMap[dateKey]) {
+                if (holidayMap[dateKey].holiday === false) {
+                    isWorkday = true; // 补班日
+                } else if (holidayMap[dateKey].holiday === true) {
+                    isWorkday = false; // 法定节假日
+                }
+            }
+            
+            if (isWorkday) {
+                return checkDate;
+            }
+        }
+        
+        return null; // 如果整个月都没有工作日（理论上不可能）
+    }
+    
+    /**
+     * 🔥 从打卡记录中查找指定日期的下班打卡
+     * @param records 所有打卡记录
+     * @param userId 用户ID
+     * @param targetDate 目标日期
+     * @returns 下班打卡时间，如果没有则返回undefined
+     */
+    public findCheckoutTime(
+        records: PunchRecord[], 
+        userId: string, 
+        targetDate: Date
+    ): Date | undefined {
+        const targetDateStr = targetDate.toISOString().split('T')[0];
+        
+        // 查找该日期的所有下班打卡记录
+        const checkoutRecords = records.filter(r => {
+            const recordDate = new Date(r.workDate);
+            const recordDateStr = recordDate.toISOString().split('T')[0];
+            return r.userId === userId && 
+                   r.checkType === 'OffDuty' && 
+                   recordDateStr === targetDateStr;
+        });
+        
+        if (checkoutRecords.length === 0) {
+            return undefined;
+        }
+        
+        // 如果有多条记录，返回最晚的一条
+        const latestCheckout = checkoutRecords.reduce((latest, current) => {
+            const latestTime = new Date(latest.userCheckTime);
+            const currentTime = new Date(current.userCheckTime);
+            return currentTime > latestTime ? current : latest;
+        });
+        
+        return new Date(latestCheckout.userCheckTime);
     }
 
     /**
