@@ -42,24 +42,35 @@ export const DirectMonthPicker: React.FC<DirectMonthPickerProps> = ({
             '7月', '8月', '9月', '10月', '11月', '12月'
         ];
 
+        // 获取当前年月，用于判断是否是未来月份
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1; // getMonth() 返回 0-11，需要 +1
+
         for (let i = 0; i < 12; i++) {
             const monthValue = `${viewYear}-${String(i + 1).padStart(2, '0')}`;
             const isSelected = monthValue === value;
             const isCurrentMonth = monthValue === new Date().toISOString().slice(0, 7);
+            
+            // 🔥 判断是否是未来月份
+            const isFutureMonth = viewYear > currentYear || (viewYear === currentYear && (i + 1) > currentMonth);
+            const isDisabled = disabled || isFutureMonth;
 
             months.push(
                 <button
                     key={monthValue}
-                    onClick={() => !disabled && onChange(monthValue)}
-                    disabled={disabled}
+                    onClick={() => !isDisabled && onChange(monthValue)}
+                    disabled={isDisabled}
                     className={`
                         p-2 text-xs font-medium rounded-md transition-colors
-                        ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-                        ${isSelected 
-                            ? 'bg-sky-500 text-white' 
-                            : isCurrentMonth
-                                ? 'bg-sky-100 text-sky-600 dark:bg-sky-600/20 dark:text-sky-300'
-                                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:text-slate-900 dark:hover:text-white'
+                        ${isDisabled ? 'opacity-40 cursor-not-allowed' : ''}
+                        ${isFutureMonth
+                            ? 'text-slate-400 dark:text-slate-600'
+                            : isSelected 
+                                ? 'bg-sky-500 text-white' 
+                                : isCurrentMonth
+                                    ? 'bg-sky-100 text-sky-600 dark:bg-sky-600/20 dark:text-sky-300'
+                                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:text-slate-900 dark:hover:text-white'
                         }
                     `}
                 >
@@ -107,12 +118,12 @@ export const DirectMonthPicker: React.FC<DirectMonthPickerProps> = ({
                         {viewYear}年
                     </span>
                     <button
-                        onClick={() => !disabled && setViewYear(viewYear + 1)}
-                        disabled={disabled}
+                        onClick={() => !disabled && viewYear < new Date().getFullYear() && setViewYear(viewYear + 1)}
+                        disabled={disabled || viewYear >= new Date().getFullYear()}
                         className={`
                             p-1 rounded transition-colors
-                            ${disabled 
-                                ? 'opacity-50 cursor-not-allowed' 
+                            ${disabled || viewYear >= new Date().getFullYear()
+                                ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-slate-600' 
                                 : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700'
                             }
                         `}

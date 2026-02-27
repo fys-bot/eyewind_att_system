@@ -17,6 +17,7 @@ import { Modal } from '../../Modal.tsx';
 import { analyzeCalendarPattern } from '../../../services/aiChatService.ts';
 import { getCachedAnalysis, setCachedAnalysis, getCalendarAnalysisCacheKey } from '../../../services/aiCacheService.ts';
 import { MarkdownRenderer } from './MarkdownRenderer.tsx';
+import { useAttendanceRuleConfig } from '../../../hooks/useAttendanceRuleConfig.ts';
 
 const LEAVE_TYPE_STYLES: Record<string, string> = {
     '年假': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800',
@@ -31,6 +32,8 @@ const LEAVE_TYPE_STYLES: Record<string, string> = {
     '丧假': 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600',
     '缺卡': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300 border border-red-200 dark:border-red-800',
     '迟到': 'bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300 border border-orange-200 dark:border-orange-800',
+    '带薪福利假': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800',
+    '福利假': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800',
     'default': 'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-800'
 };
 
@@ -55,6 +58,7 @@ const CalendarEmployeeOverviewModal: React.FC<{
     const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
     const [isAnalysing, setIsAnalysing] = useState(false);
     const [showAiPanel, setShowAiPanel] = useState(false);
+    const [showExpandedAnalysis, setShowExpandedAnalysis] = useState(false);
 
     // 解析月份获取 year 和 month
     const [year, monthNum] = useMemo(() => {
@@ -280,13 +284,21 @@ ${remarks.length > 0 ? remarks.join('\n') : '无异常记录'}
                     {showAiPanel && (
                         <div className="p-4">
                             {aiAnalysis && !isAnalysing && (
-                                <div className="flex justify-end mb-2">
+                                <div className="flex justify-end gap-2 mb-2">
                                     <button
                                         onClick={() => runAiAnalysis(true)}
                                         className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded transition-colors"
                                     >
-                                        <Loader2Icon className="w-3 h-3" />
+                                        <RefreshCwIcon className="w-3 h-3" />
                                         重新分析
+                                    </button>
+                                    <button
+                                        onClick={() => setShowExpandedAnalysis(true)}
+                                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded transition-colors"
+                                        title="展开查看完整内容"
+                                    >
+                                        <ChevronRightIcon className="w-3 h-3" />
+                                        展开
                                     </button>
                                 </div>
                             )}
@@ -308,6 +320,24 @@ ${remarks.length > 0 ? remarks.join('\n') : '无异常记录'}
                     )}
                 </div>
             </div>
+            
+            {/* AI 分析展开模态框 */}
+            {showExpandedAnalysis && (
+                <Modal 
+                    isOpen={showExpandedAnalysis} 
+                    onClose={() => setShowExpandedAnalysis(false)} 
+                    title={`AI 考勤异常分析 - ${user?.name || ''} (${month})`}
+                    size="2xl"
+                >
+                    <div className="max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+                        {aiAnalysis ? (
+                            <MarkdownRenderer text={aiAnalysis} />
+                        ) : (
+                            <p className="text-slate-500 italic text-sm">无法生成分析结果。</p>
+                        )}
+                    </div>
+                </Modal>
+            )}
         </Modal>
     );
 };
@@ -868,6 +898,21 @@ export const AttendanceCalendarView: React.FC<{
     const [filterStatus, setFilterStatus] = useState('all');
     const [highlightedEmployee, setHighlightedEmployee] = useState<string | null>(null); // 高亮的员工ID
 
+    // 🔥 获取考勤规则配置（用于读取带薪福利假配置）
+    const { config: ruleConfig } = useAttendanceRuleConfig(currentCompany);
+    const customHolidayDates = useMemo(() => {
+        const dateMap = new Map<string, string>(); // 存储日期 -> 原因的映射
+        const customDays = ruleConfig?.rules?.workdaySwapRules?.customDays || [];
+        
+        customDays.forEach(day => {
+            if (day.type === 'holiday' && day.reason?.includes('福利假')) {
+                dateMap.set(day.date, day.reason); // 存储日期和原因
+            }
+        });
+        
+        return dateMap;
+    }, [ruleConfig, currentCompany]);
+
     // 自动定位到目标员工
     useEffect(() => {
         if (targetEmployee) {
@@ -965,28 +1010,49 @@ export const AttendanceCalendarView: React.FC<{
             return employeeMatch && statusMatch;
         });
 
-        // Apply Sort based on user requirements:
-        // 1. Performance Penalty (Descending - worst first)
-        // 2. Full Attendance (True first)
-        // 3. Accumulated Late Minutes (Descending - worst first for the remaining)
+        // 🔥 应用排序：与仪表盘保持一致
+        // 排序优先级：旷工次数 → 豁免后迟到 → 累计迟到 → 缺卡次数 → 全勤
         return result.sort((a, b) => {
             const statsA = userStatsMap.get(a.userid) || {} as EmployeeStats;
             const statsB = userStatsMap.get(b.userid) || {} as EmployeeStats;
 
-            // 1. Penalty
-            const penaltyA = statsA.performancePenalty || 0;
-            const penaltyB = statsB.performancePenalty || 0;
-            if (penaltyA !== penaltyB) return penaltyB - penaltyA;
+            const aAbsenteeism = statsA.absenteeism || 0;
+            const bAbsenteeism = statsB.absenteeism || 0;
+            const aExemptedLate = statsA.exemptedLateMinutes || 0;
+            const bExemptedLate = statsB.exemptedLateMinutes || 0;
+            const aLateMinutes = statsA.lateMinutes || 0;
+            const bLateMinutes = statsB.lateMinutes || 0;
+            const aMissing = statsA.missing || 0;
+            const bMissing = statsB.missing || 0;
+            const aIsFullAttendance = statsA.isFullAttendance;
+            const bIsFullAttendance = statsB.isFullAttendance;
 
-            // 2. Full Attendance
-            const fullA = statsA.isFullAttendance ? 1 : 0;
-            const fullB = statsB.isFullAttendance ? 1 : 0;
-            if (fullA !== fullB) return fullB - fullA;
+            // 1. 旷工次数从高到低
+            if (aAbsenteeism !== bAbsenteeism) {
+                return bAbsenteeism - aAbsenteeism;
+            }
 
-            // 3. Late Minutes
-            const lateA = statsA.lateMinutes || 0;
-            const lateB = statsB.lateMinutes || 0;
-            return lateB - lateA;
+            // 2. 豁免后迟到从高到低
+            if (aExemptedLate !== bExemptedLate) {
+                return bExemptedLate - aExemptedLate;
+            }
+
+            // 3. 累计迟到从高到低
+            if (aLateMinutes !== bLateMinutes) {
+                return bLateMinutes - aLateMinutes;
+            }
+
+            // 4. 缺卡次数从高到低
+            if (aMissing !== bMissing) {
+                return bMissing - aMissing;
+            }
+
+            // 5. 全勤排在最后
+            if (aIsFullAttendance && !bIsFullAttendance) return 1;
+            if (!aIsFullAttendance && bIsFullAttendance) return -1;
+
+            // 6. 其他情况保持原顺序
+            return 0;
         });
     }, [users, selectedEmployees, filterStatus, attendanceMap, userStatsMap]);
 
@@ -1561,6 +1627,7 @@ export const AttendanceCalendarView: React.FC<{
                                         const day = i + 1;
                                         const dayDate = new Date(year, monthIndex, day);
                                         const dateKey = `${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                        const fullDateKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`; // 🔥 完整日期格式用于匹配福利假
                                         const isWeekend = dayDate.getDay() === 0 || dayDate.getDay() === 6;
                                         const holidayInfo = holidays?.[dateKey];
                                         let isWorkday = !isWeekend;
@@ -1788,16 +1855,17 @@ export const AttendanceCalendarView: React.FC<{
                                         
                                         // 🔥 使用规则引擎计算迟到分钟数（传入 holidayMap 用于判断工作日）
                                         const lateRecord = statusData?.records.find(r => r.checkType === 'OnDuty' && r.timeResult === 'Late');
+                                        
                                         const lateMinutes = lateRecord ? ruleEngine.calculateLateMinutes(
                                             lateRecord,
                                             dayDate,
                                             previousDayCheckoutTime,
                                             previousWeekendCheckoutTime,
                                             previousMonthCheckoutTime,
-                                            holidays, // 🔥 传入节假日映射
-                                            processDetail, // 🔥 新增：传入请假/调休审批详情
-                                            user.name, // 🔥 传入员工名字用于日志
-                                            lookbackCheckoutFinder // 🔥 传入向前查询回调函数
+                                            holidays,
+                                            processDetail,
+                                            user.name,
+                                            lookbackCheckoutFinder
                                         ) : 0;
 
                                         let isMissing = statusData?.status === 'incomplete' || statusData?.records.some(r => r.timeResult === 'NotSigned');
@@ -1841,7 +1909,17 @@ export const AttendanceCalendarView: React.FC<{
 
                                         const isNormal = !isMissing && !lateMinutes && !isOvertime && statusData;
 
+                                        // 🔥 检查是否为带薪福利假（使用完整日期格式）
+                                        const benefitHolidayReason = customHolidayDates.get(fullDateKey);
+                                        const isPaidBenefitHoliday = !!benefitHolidayReason;
+
                                         const badges = [];
+                                        
+                                        // 🔥 优先显示带薪福利假标签（使用配置的原因作为标签文本）
+                                        if (isPaidBenefitHoliday && benefitHolidayReason) {
+                                            badges.push({ text: benefitHolidayReason, className: LEAVE_TYPE_STYLES['福利假'] });
+                                        }
+                                        
                                         if (leaveType) {
                                             badges.push({ text: leaveType, className: LEAVE_TYPE_STYLES[leaveType] || LEAVE_TYPE_STYLES.default });
                                         } else if (isFullDayLeaveCombined) {
@@ -1884,6 +1962,11 @@ export const AttendanceCalendarView: React.FC<{
                                         let bgClass = statusData ? cellClasses[statusData.status] : cellClasses['noRecord'];
                                         if (isNormal || isFullDayLeaveCombined) {
                                             bgClass = 'bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50';
+                                        }
+                                        
+                                        // 🔥 带薪福利假使用特殊背景色
+                                        if (isPaidBenefitHoliday) {
+                                            bgClass = 'bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50';
                                         }
 
                                         const showAbnormalIcon = statusData?.hasAbnormality && !isNormal && !isFullDayLeaveCombined;

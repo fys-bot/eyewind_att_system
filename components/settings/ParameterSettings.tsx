@@ -69,8 +69,10 @@ export const ParameterSettingsPage: React.FC = () => {
             }));
             setStatusMessage({ type: 'success', text: '参数已保存并全局生效。' });
             setTimeout(() => setStatusMessage(null), 3000);
+            alert('参数配置已成功保存！');
         } catch (e) {
             setStatusMessage({ type: 'error', text: '保存失败。' });
+            alert('保存失败，请重试');
         }
     };
 

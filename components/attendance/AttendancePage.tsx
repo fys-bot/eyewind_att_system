@@ -2,13 +2,13 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import type { AttendanceSheet, EmployeeAttendanceRecord, AttendanceSheetStatus, DingTalkUser, User } from '../../database/schema.ts';
 import { db } from '../../database/mockDb.ts';
-import { Loader2Icon } from '../Icons.tsx';
+import { Loader2Icon, DownloadIcon } from '../Icons.tsx';
 import { fetchAllEmployees } from './verification/api.ts';
 import { CreateAttendanceWizard } from './verification/CreateWizard.tsx';
 import { SheetList } from './verification/SheetList.tsx';
 import { AttendanceDetailView } from './verification/DetailView.tsx';
 import { AttendanceEmptyState } from './EmptyState.tsx';
-import { SmartCache } from './utils.ts';
+import { SmartCache, DashboardCache } from './utils.ts';
 
 // 🔥 计算记录完整性得分的辅助函数
 function calculateRecordCompleteness(record: any): number {
@@ -78,6 +78,10 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
     const [isDingTalkDataLoading, setIsDingTalkDataLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [triggerBulkArchive, setTriggerBulkArchive] = useState<{ month: string, timestamp: number } | null>(null);
+    
+    // 🔥 新增：检查仪表盘缓存是否有数据
+    const [hasDashboardCache, setHasDashboardCache] = useState(false);
+    const [isCheckingCache, setIsCheckingCache] = useState(false);
     
     // 🔥 防止重复调用的标志 - 移除状态，改用 ref
     const isMountedRef = useRef(true);
@@ -693,6 +697,228 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
         await SmartCache.remove(`ATTENDANCE_SHEETS_RAW`); // Invalidate cache on new creation
     };
 
+    // 🔥 新增：检查仪表盘缓存是否有数据
+    const checkDashboardCache = useCallback(async () => {
+        if (!globalMonth) {
+            console.log('[AttendancePage] checkDashboardCache: 没有globalMonth');
+            return;
+        }
+        
+        console.log('[AttendancePage] 开始检查仪表盘缓存:', { currentCompany, globalMonth });
+        setIsCheckingCache(true);
+        try {
+            const cachedData = await DashboardCache.getDashboardData(currentCompany, globalMonth);
+            console.log('[AttendancePage] 缓存数据:', {
+                hasCachedData: !!cachedData,
+                employeesCount: cachedData?.employees?.length || 0,
+                cachedData: cachedData ? {
+                    employees: cachedData.employees?.length,
+                    attendanceMap: Object.keys(cachedData.attendanceMap || {}).length,
+                    processDataMap: Object.keys(cachedData.processDataMap || {}).length
+                } : null
+            });
+            const hasCache = !!cachedData && cachedData.employees.length > 0;
+            console.log('[AttendancePage] 设置hasDashboardCache:', hasCache);
+            setHasDashboardCache(hasCache);
+        } catch (error) {
+            console.error('[AttendancePage] 检查仪表盘缓存失败:', error);
+            setHasDashboardCache(false);
+        } finally {
+            setIsCheckingCache(false);
+        }
+    }, [currentCompany, globalMonth]);
+
+    // 🔥 新增：从仪表盘导入数据
+    const handleImportFromDashboard = useCallback(async () => {
+        if (!globalMonth) {
+            alert('请先选择月份');
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            // 从缓存获取仪表盘数据
+            const cachedData = await DashboardCache.getDashboardData(currentCompany, globalMonth);
+            
+            if (!cachedData || !cachedData.employees || cachedData.employees.length === 0) {
+                alert('仪表盘缓存中没有数据，请先在考勤日历中加载数据');
+                return;
+            }
+
+            // 使用与"生成确认单"相同的逻辑生成EmployeeAttendanceRecord
+            const { employees, attendanceMap, processDataMap, companyCounts } = cachedData;
+            
+            // 获取目标公司的员工
+            const targetCompanyName = currentCompany;
+            const companyUsers = employees.filter(u => {
+                const userCompany = u.mainCompany || '';
+                if (targetCompanyName === 'eyewind') {
+                    return userCompany.includes('风眼') || userCompany === 'eyewind';
+                } else if (targetCompanyName === 'hydodo') {
+                    return userCompany.includes('海多多') || userCompany === 'hydodo';
+                }
+                return false;
+            });
+
+            if (companyUsers.length === 0) {
+                alert(`${targetCompanyName === 'eyewind' ? '风眼' : '海多多'}没有员工数据`);
+                return;
+            }
+
+            // 生成EmployeeAttendanceRecord数据
+            const [year, monthStr] = globalMonth.split('-');
+            const month = parseInt(monthStr) - 1;
+            const daysInMonth = new Date(parseInt(year), month + 1, 0).getDate();
+
+            const records: EmployeeAttendanceRecord[] = companyUsers.map(user => {
+                // 🔥 修复：从缓存数据中获取员工统计信息
+                // companyCounts 实际上应该是 companyEmployeeStats 的结构
+                const companyStats = (companyCounts as any)[user.mainCompany || ''];
+                const stats = companyStats?.employeeStats?.[user.userid] || companyStats?.[user.userid]?.stats;
+                const dailyData: Record<string, string> = {};
+
+                // 添加基础字段
+                dailyData['应出勤天数'] = String(stats?.shouldAttendanceDays || 21.75);
+                dailyData['正常出勤天数'] = String(stats?.actualAttendanceDays || 0);
+                dailyData['是否全勤'] = stats?.isFullAttendance ? '是' : '否';
+                dailyData['迟到分钟数'] = String(stats?.lateMinutes || 0);
+                dailyData['豁免后迟到分钟数'] = String(stats?.exemptedLateMinutes || 0);
+
+                // 添加每日状态
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const userAttendance = attendanceMap[user.userid];
+                    const dayAttendance = userAttendance?.[day];
+                    
+                    if (!dayAttendance || !dayAttendance.records || dayAttendance.records.length === 0) {
+                        dailyData[String(day)] = '';
+                        continue;
+                    }
+
+                    // 检查请假
+                    const procRecord = dayAttendance.records.find((r: any) => r.procInstId);
+                    if (procRecord && processDataMap[procRecord.procInstId]) {
+                        const p = processDataMap[procRecord.procInstId];
+                        const leaveType = p.formValues?.leaveType || p.bizType;
+                        if (leaveType) {
+                            dailyData[String(day)] = leaveType;
+                            continue;
+                        }
+                    }
+
+                    // 检查缺卡
+                    if (dayAttendance.status === 'incomplete') {
+                        dailyData[String(day)] = '缺卡';
+                        continue;
+                    }
+
+                    // 检查迟到
+                    const lateRecord = dayAttendance.records.find((r: any) => r.checkType === 'OnDuty' && r.timeResult === 'Late');
+                    if (lateRecord) {
+                        dailyData[String(day)] = '迟到';
+                        continue;
+                    }
+
+                    // 正常出勤
+                    dailyData[String(day)] = '√';
+                }
+
+                // 生成备注
+                const remarks: string[] = [];
+                for (let day = 1; day <= daysInMonth; day++) {
+                    const userAttendance = attendanceMap[user.userid];
+                    const dayAttendance = userAttendance?.[day];
+                    if (!dayAttendance) continue;
+
+                    const procRecord = dayAttendance.records.find((r: any) => r.procInstId);
+                    if (procRecord) {
+                        const p = processDataMap[procRecord.procInstId];
+                        if (p) {
+                            const type = p.formValues?.leaveType || p.bizType;
+                            const duration = p.formValues?.duration || 0;
+                            const unit = p.formValues?.durationUnit || p.formValues?.unit || '';
+                            
+                            if (type && duration > 0) {
+                                let hours = duration;
+                                if (unit.includes('day') || unit.includes('天')) {
+                                    hours = duration * 8;
+                                }
+                                
+                                const dateStr = `${year}-${monthStr}-${String(day).padStart(2, '0')}`;
+                                const remarkEntry = `${type} ${dateStr} 共${hours}小时`;
+                                if (!remarks.includes(remarkEntry)) remarks.push(remarkEntry);
+                            }
+                        }
+                    }
+
+                    if (dayAttendance.status === 'incomplete') {
+                        const remarkEntry = `缺卡 ${year}-${monthStr}-${String(day).padStart(2, '0')}`;
+                        if (!remarks.includes(remarkEntry)) remarks.push(remarkEntry);
+                    }
+                }
+                
+                dailyData['备注'] = remarks.length > 0 ? remarks.join('\n') : '-';
+                
+                return {
+                    id: `gen_${user.userid}_${Date.now()}`,
+                    employeeId: user.job_number || user.userid,
+                    employeeName: user.name,
+                    department: user.department || '',
+                    sendStatus: 'pending' as const,
+                    viewStatus: 'pending' as const,
+                    confirmStatus: 'pending' as const,
+                    sent_at: null,
+                    confirmed_at: null,
+                    viewed_at: null,
+                    mainCompany: targetCompanyName,
+                    signatureBase64: null,
+                    isSigned: false,
+                    dailyData
+                };
+            });
+
+            // 切换到创建向导，传入预加载数据
+            setView('create');
+            // 通过CreateWizard的preloadedData prop传递数据
+            // 需要修改CreateWizard组件以支持这种方式
+            
+            // 临时方案：直接创建一个新的sheet
+            const newSheet: Omit<AttendanceSheet, 'id' | 'createdAt'> = {
+                title: `${globalMonth.replace('-', '年')}月考勤确认单`,
+                month: globalMonth,
+                status: 'draft',
+                settings: {
+                    reminderText: '请仔细核对考勤数据, 并及时确认!',
+                    showReminder: true,
+                    autoConfirmEnabled: true,
+                    autoConfirmDate: new Date().toISOString().slice(0, 16),
+                    feedbackEnabled: true,
+                    feedbackContactPerson: '陈丽瑶',
+                    readAndBurn: false,
+                    employeeSignature: true,
+                    hideEmptyColumnsOption: 'none',
+                    notificationMethod: '考勤确认助手通知+待办',
+                    showColumns: []
+                },
+                employeeRecords: records
+            };
+
+            await handleCreateSheet(newSheet);
+            
+        } catch (error) {
+            console.error('[AttendancePage] 从仪表盘导入数据失败:', error);
+            alert(error instanceof Error ? error.message : '导入失败');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [currentCompany, globalMonth, handleCreateSheet]);
+
+    // 🔥 监听月份变化，检查缓存
+    useEffect(() => {
+        if (globalMonth && view === 'dashboard') {
+            checkDashboardCache();
+        }
+    }, [globalMonth, view, checkDashboardCache]);
+
     const handleUpdateSheet = async (updatedSheet: AttendanceSheet) => {
         setSheets(prev => prev.map(s => s.id === updatedSheet.id ? updatedSheet : s));
         db.updateAttendanceSheet(updatedSheet);
@@ -802,6 +1028,9 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                         month={globalMonth}
                         company={currentCompany}
                         onCreateNew={() => setView('create')}
+                        onImportFromDashboard={handleImportFromDashboard}
+                        hasDashboardCache={hasDashboardCache}
+                        isCheckingCache={isCheckingCache}
                     />;
                 }
                 

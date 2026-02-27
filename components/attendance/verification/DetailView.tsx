@@ -457,7 +457,10 @@ export const AttendanceDetailView: React.FC<{
             setChangesToConfirm(null);
             setEditingRecord(finalRecord);
             setEditingViewMode('preview');
-        } catch (error) { console.error("Update failed", error); alert("Update failed"); }
+            
+            // 保存成功提示
+            alert('考勤数据已成功保存！');
+        } catch (error) { console.error("Update failed", error); alert("保存失败，请重试"); }
     };
 
     // ... (Remainder of render remains mostly the same, ensuring buttons use permissions)

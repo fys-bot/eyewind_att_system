@@ -88,6 +88,7 @@ export const UserManagement: React.FC = () => {
                     status: formData.status as 'active' | 'inactive',
                     password: formData.password || undefined
                 });
+                alert('用户信息已成功更新！');
             } else {
                 await userApi.createUser({
                     name: formData.name,
@@ -96,6 +97,7 @@ export const UserManagement: React.FC = () => {
                     status: formData.status as 'active' | 'inactive',
                     password: formData.password || '123456'
                 });
+                alert('用户已成功创建！');
             }
             await loadUsers();
             setIsModalOpen(false);

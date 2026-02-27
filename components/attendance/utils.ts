@@ -37,6 +37,7 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
             lateExemptionCount: 3,
             lateExemptionMinutes: 15,
             lateExemptionEnabled: true,
+            lateExemptionMode: 'byDate', // 'byDate'=按日期从月初到月末, 'byMinutes'=按迟到分钟数从大到小
             performancePenaltyMode: 'capped', // 封顶模式
             unlimitedPenaltyThresholdTime: '09:01', // 上不封顶模式：超过9:01开始扣款
             unlimitedPenaltyCalcType: 'perMinute', // 按分钟计算
@@ -141,50 +142,7 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
             crossDayCheckout: {
                 enabled: true,
                 enableLookback: true, // 启用向前查询
-                lookbackDays: 3, // 最多向前查询3天
-                rules: [
-                    // 跨天规则（前一天影响第二天）
-                    {
-                        checkoutTime: "20:30",
-                        nextCheckinTime: "09:30", 
-                        description: "晚上8点半后打卡，第二天可9点半上班",
-                        applyTo: 'day'
-                    },
-                    {
-                        checkoutTime: "24:00",
-                        nextCheckinTime: "13:30",
-                        description: "晚上12点后打卡，第二天可下午1点半上班",
-                        applyTo: 'day'
-                    },
-                    // 跨周规则（周五/周末影响周一）
-                    {
-                        checkoutTime: "20:30",
-                        nextCheckinTime: "09:30",
-                        description: "周五晚上8点半后打卡，周一可9点半上班",
-                        applyTo: 'week',
-                        weekDays: ['friday']
-                    },
-                    {
-                        checkoutTime: "24:00",
-                        nextCheckinTime: "13:30",
-                        description: "周五晚上12点后打卡，周一可下午1点半上班",
-                        applyTo: 'week',
-                        weekDays: ['friday']
-                    },
-                    // 跨月规则（上月最后一天影响本月第一天）
-                    {
-                        checkoutTime: "00:00",
-                        nextCheckinTime: "09:30",
-                        description: "本月第一天默认9点半上班",
-                        applyTo: 'month'
-                    },
-                    {
-                        checkoutTime: "24:00",
-                        nextCheckinTime: "13:30",
-                        description: "上月最后一天晚上12点后打卡，本月第一天可下午1点半上班",
-                        applyTo: 'month'
-                    }
-                ]
+                lookbackDays: 3 // 最多向前查询3天
             }
         }
     },
@@ -201,6 +159,7 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
             lateExemptionCount: 0, // 不设置豁免
             lateExemptionMinutes: 0, // 不设置豁免时长
             lateExemptionEnabled: true, // 启用豁免功能
+            lateExemptionMode: 'byDate', // 'byDate'=按日期从月初到月末, 'byMinutes'=按迟到分钟数从大到小
             performancePenaltyMode: 'capped', // 封顶模式
             unlimitedPenaltyThresholdTime: '09:11', // 上不封顶模式：超过9:11开始扣款
             unlimitedPenaltyCalcType: 'perMinute', // 按分钟计算
@@ -251,8 +210,7 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
             crossDayCheckout: {
                 enabled: false, // 禁用跨天打卡
                 enableLookback: false,
-                lookbackDays: 3,
-                rules: [] // 空数组，不设置跨天规则
+                lookbackDays: 3
             }
         }
     }
@@ -859,7 +817,7 @@ class DingTalkTokenManager {
 
             if (this.refreshTimers[company]) clearTimeout(this.refreshTimers[company]);
 
-            const response = await fetch("http://localhost:5001/etl/dingding/gettoken", {
+            const response = await fetch("http://10.10.88.135:5001/etl/dingding/gettoken", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1238,7 +1196,7 @@ export const fetchCompanyData = async (mainCompany: string, fromDate: string, to
         const doFetch = async (forceRefresh = false) => {
             const accessToken = await dingTalkTokenManager.getToken(mainCompany, forceRefresh);
 
-            const employeesResponse = await fetch("http://localhost:5001/etl/dingding/employees", {
+            const employeesResponse = await fetch("http://10.10.88.135:5001/etl/dingding/employees", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ dingToken: accessToken }),
             });
@@ -1260,7 +1218,7 @@ export const fetchCompanyData = async (mainCompany: string, fromDate: string, to
                 department: e.department
             }));
 
-            const punchResponse = await fetch("http://localhost:5001/etl/dingding/punch", {
+            const punchResponse = await fetch("http://10.10.88.135:5001/etl/dingding/punch", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1345,7 +1303,7 @@ export const fetchProcessDetail = async (procInstId: string, mainCompany: string
         const company = (mainCompany?.includes('海多多') || mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
         const accessToken = await dingTalkTokenManager.getToken(company);
 
-        const response = await fetch(`http://localhost:5001/etl/dingding/processInstances/${procInstId}`, {
+        const response = await fetch(`http://10.10.88.135:5001/etl/dingding/processInstances/${procInstId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ dingToken: accessToken })

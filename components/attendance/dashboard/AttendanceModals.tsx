@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import type { DingTalkUser, DailyAttendanceStatus, PunchRecord, AttendanceMap, EmployeeStats } from '../../../database/schema.ts';
 import { Modal } from '../../Modal.tsx';
 import { Avatar, ProcessDetailCard } from './AttendanceShared.tsx';
-import { ArrowLeftIcon, XIcon, Loader2Icon, ChevronRightIcon, LinkIcon, FileTextIcon, ChevronUpIcon, ChevronDownIcon, SparklesIcon, RefreshCwIcon, BarChartIcon, PieChartIcon, CalendarIcon, CheckCircleIcon, AlertTriangleIcon, ClockIcon, DollarSignIcon, TrendingUpIcon, UserIcon, NetworkIcon, ShieldCheckIcon } from '../../Icons.tsx';
+import { ArrowLeftIcon, XIcon, Loader2Icon, ChevronRightIcon, LinkIcon, FileTextIcon, ChevronUpIcon, ChevronDownIcon, SparklesIcon, RefreshCwIcon, BarChartIcon, PieChartIcon, CalendarIcon, CheckCircleIcon, AlertTriangleIcon, ClockIcon, DollarSignIcon, TrendingUpIcon, UserIcon, NetworkIcon, ShieldCheckIcon, MaximizeIcon } from '../../Icons.tsx';
 import { getLateMinutes, isFullDayLeave, calculateDailyLeaveDuration, checkTimeInLeaveRange } from '../utils.ts';
 import { AttendanceRuleManager } from '../AttendanceRuleEngine.ts';
 import { analyzeAttendanceInsights } from '../../../services/aiChatService.ts';
@@ -394,6 +394,7 @@ export const EmployeeAttendanceAnalysisModal: React.FC<any> = ({
 }) => {
     const [analysis, setAnalysis] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
+    const [showExpandedAnalysis, setShowExpandedAnalysis] = useState(false);
     
     // 使用 ref 跟踪当前员工 ID，防止异步请求竞态条件
     const currentEmployeeIdRef = useRef<string | null>(null);
@@ -405,9 +406,6 @@ export const EmployeeAttendanceAnalysisModal: React.FC<any> = ({
         const currentUserId = employee.user.userid;
         // 更新当前员工 ID
         currentEmployeeIdRef.current = currentUserId;
-        
-        // 先清空之前的分析结果
-        setAnalysis(null);
         
         // 生成缓存 key
         const cacheKey = getEmployeeAnalysisCacheKey(currentUserId, year, month);
@@ -431,6 +429,8 @@ export const EmployeeAttendanceAnalysisModal: React.FC<any> = ({
         }
         
         // 缓存不存在或强制刷新，调用 AI 接口
+        // 🔥 只有在没有缓存或强制刷新时才清空之前的分析结果
+        setAnalysis(null);
         setLoading(true);
         
         // 构建提示词
@@ -477,11 +477,11 @@ ${employee.user.department ? `- 部门：${employee.user.department}` : ''}
         }
     };
 
-    // 当员工变化时，清空之前的分析结果并重新分析
+    // 当员工变化时，重新分析（优先使用缓存）
     useEffect(() => {
-        // 清空之前的分析结果
-        setAnalysis(null);
-        setLoading(false);
+        // 🔥 不再清空之前的分析结果，让 runEmployeeAnalysis 自己决定是否清空
+        // setAnalysis(null);
+        // setLoading(false);
         
         if (employee && year && month) {
             runEmployeeAnalysis();
@@ -677,13 +677,23 @@ ${employee.user.department ? `- 部门：${employee.user.department}` : ''}
                     <div className="flex items-center gap-2">
                         {loading && <div className="flex items-center gap-2 text-xs text-indigo-500"><Loader2Icon className="w-3 h-3 animate-spin" /> 分析中...</div>}
                         {analysis && !loading && (
-                            <button
-                                onClick={() => runEmployeeAnalysis(true)}
-                                className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded transition-colors"
-                            >
-                                <RefreshCwIcon className="w-3 h-3" />
-                                重新分析
-                            </button>
+                            <>
+                                <button
+                                    onClick={() => runEmployeeAnalysis(true)}
+                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded transition-colors"
+                                >
+                                    <RefreshCwIcon className="w-3 h-3" />
+                                    重新分析
+                                </button>
+                                <button
+                                    onClick={() => setShowExpandedAnalysis(true)}
+                                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded transition-colors"
+                                    title="展开查看完整内容"
+                                >
+                                    <MaximizeIcon className="w-3 h-3" />
+                                    展开
+                                </button>
+                            </>
                         )}
                     </div>
                 </div>
@@ -699,6 +709,24 @@ ${employee.user.department ? `- 部门：${employee.user.department}` : ''}
                     )}
                 </div>
             </div>
+            
+            {/* AI 分析展开模态框 */}
+            {showExpandedAnalysis && (
+                <Modal 
+                    isOpen={showExpandedAnalysis} 
+                    onClose={() => setShowExpandedAnalysis(false)} 
+                    title={`AI 智能管理建议 - ${employee?.user?.name || ''}`}
+                    size="2xl"
+                >
+                    <div className="max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+                        {analysis ? (
+                            <MarkdownRenderer text={analysis} />
+                        ) : (
+                            <p className="text-slate-500 italic text-sm">无法生成分析结果。</p>
+                        )}
+                    </div>
+                </Modal>
+            )}
         </Modal>
     );
 };

@@ -112,6 +112,7 @@ export const AttendanceRulesPage: React.FC = () => {
                 }
                 return rule as LateRule;
             }),
+            lateExemptionMode: rules.lateExemptionMode || DEFAULT_CONFIGS[selectedCompany].rules!.lateExemptionMode || 'byDate',
             leaveDisplayRules: rules.leaveDisplayRules || DEFAULT_CONFIGS[selectedCompany].rules!.leaveDisplayRules,
             performancePenaltyRules: (rules.performancePenaltyRules || DEFAULT_CONFIGS[selectedCompany].rules!.performancePenaltyRules).map(rule => ({
                 ...rule,
@@ -231,7 +232,7 @@ export const AttendanceRulesPage: React.FC = () => {
         if (isMountedRef.current) {
             setHasChanges(false);
         }
-    }, [selectedCompany, isCurrentlyLoading]); // 依赖 selectedCompany 和 isCurrentlyLoading
+    }, [selectedCompany]); // 🔥 只依赖 selectedCompany，移除 isCurrentlyLoading 避免循环
 
     // 🔥 主要初始化 useEffect - 每次进入页面或切换公司都强制从数据库加载规则
     useEffect(() => {
@@ -324,6 +325,7 @@ export const AttendanceRulesPage: React.FC = () => {
             lateExemptionCount: dbConfig.late_exemption_count ?? defaultConfig.rules!.lateExemptionCount,
             lateExemptionMinutes: dbConfig.late_exemption_minutes ?? defaultConfig.rules!.lateExemptionMinutes,
             lateExemptionEnabled: dbConfig.late_exemption_enabled ?? defaultConfig.rules!.lateExemptionEnabled,
+            lateExemptionMode: dbConfig.late_exemption_mode || defaultConfig.rules!.lateExemptionMode || 'byDate',
 
             performancePenaltyMode: dbConfig.perf_penalty_mode || 'capped',
             unlimitedPenaltyThresholdTime: dbConfig.unlimited_threshold_time?.substring(0, 5) || '09:01',
@@ -516,6 +518,13 @@ export const AttendanceRulesPage: React.FC = () => {
                 : '⚠️ 考勤规则已保存到本地（数据库保存失败），相关缓存已清除。';
             setStatusMessage({ type: dbSaveSuccess ? 'success' : 'error', text: successMsg });
             setTimeout(() => setStatusMessage(null), 4000);
+            
+            // 弹窗提示
+            if (dbSaveSuccess) {
+                alert('考勤规则已成功保存到数据库并全局生效！');
+            } else {
+                alert('考勤规则已保存到本地，但数据库保存失败，请检查网络连接');
+            }
 
             // 🔥 保存成功后重置修改状态
             setHasChanges(false);
@@ -792,7 +801,8 @@ ${lateRulesDesc}
 【弹性豁免政策】
 - 豁免功能：${rules.lateExemptionEnabled ? '已启用' : '已关闭'}
 ${rules.lateExemptionEnabled ? `- 月度豁免次数：${rules.lateExemptionCount}次
-- 单次豁免时长上限：${rules.lateExemptionMinutes}分钟` : ''}
+- 单次豁免时长上限：${rules.lateExemptionMinutes}分钟
+- 豁免计算方式：${rules.lateExemptionMode === 'byMinutes' ? '按迟到时长（优先豁免迟到时间最长的记录）' : '按日期顺序（从月初到月末依次豁免）'}` : ''}
 
 【全勤奖规则】
 - 全勤功能：${rules.fullAttendanceEnabled ? '已启用' : '已关闭'}
@@ -2026,6 +2036,70 @@ ${performanceRulesDesc}`
                                             <input type="number" value={formData.rules.lateExemptionMinutes} onChange={e => updateRule('lateExemptionMinutes', parseInt(e.target.value))} className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm" />
                                             <p className="text-xs text-slate-400">仅当迟到时间小于此设定值时，才消耗豁免次数。</p>
                                         </div>
+                                    </div>
+                                    
+                                    {/* 豁免方式选择 */}
+                                    <div className={`mt-6 space-y-2 ${!formData.rules.lateExemptionEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">豁免计算方式</label>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <button
+                                                type="button"
+                                                onClick={() => updateRule('lateExemptionMode', 'byDate')}
+                                                className={`p-4 rounded-lg border-2 transition-all ${
+                                                    formData.rules.lateExemptionMode === 'byDate'
+                                                        ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20'
+                                                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-orange-300'
+                                                }`}
+                                            >
+                                                <div className="flex items-start gap-3">
+                                                    <div className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                                                        formData.rules.lateExemptionMode === 'byDate'
+                                                            ? 'border-orange-500 bg-orange-500'
+                                                            : 'border-slate-300 dark:border-slate-600'
+                                                    }`}>
+                                                        {formData.rules.lateExemptionMode === 'byDate' && (
+                                                            <div className="w-2 h-2 rounded-full bg-white"></div>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex-1 text-left">
+                                                        <div className="font-medium text-slate-900 dark:text-white">按日期顺序</div>
+                                                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                                                            从月初到月末依次豁免迟到记录（默认方式）
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => updateRule('lateExemptionMode', 'byMinutes')}
+                                                className={`p-4 rounded-lg border-2 transition-all ${
+                                                    formData.rules.lateExemptionMode === 'byMinutes'
+                                                        ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20'
+                                                        : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-orange-300'
+                                                }`}
+                                            >
+                                                <div className="flex items-start gap-3">
+                                                    <div className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                                                        formData.rules.lateExemptionMode === 'byMinutes'
+                                                            ? 'border-orange-500 bg-orange-500'
+                                                            : 'border-slate-300 dark:border-slate-600'
+                                                    }`}>
+                                                        {formData.rules.lateExemptionMode === 'byMinutes' && (
+                                                            <div className="w-2 h-2 rounded-full bg-white"></div>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex-1 text-left">
+                                                        <div className="font-medium text-slate-900 dark:text-white">按迟到时长</div>
+                                                        <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                                                            优先豁免迟到时间最长的记录
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-slate-400 mt-2">
+                                            💡 提示：选择"按迟到时长"可以最大化利用豁免次数，减少员工的迟到分钟数
+                                        </p>
                                     </div>
                                 </div>
                             )}

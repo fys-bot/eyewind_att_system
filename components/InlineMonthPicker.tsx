@@ -59,25 +59,38 @@ export const InlineMonthPicker: React.FC<InlineMonthPickerProps> = ({
             '7月', '8月', '9月', '10月', '11月', '12月'
         ];
 
+        // 获取当前年月，用于判断是否是未来月份
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1; // getMonth() 返回 0-11，需要 +1
+
         for (let i = 0; i < 12; i++) {
             const monthValue = `${viewYear}-${String(i + 1).padStart(2, '0')}`;
             const isSelected = monthValue === value;
             const isCurrentMonth = monthValue === new Date().toISOString().slice(0, 7);
+            
+            // 🔥 判断是否是未来月份
+            const isFutureMonth = viewYear > currentYear || (viewYear === currentYear && (i + 1) > currentMonth);
 
             months.push(
                 <button
                     key={monthValue}
                     onClick={() => {
-                        onChange(monthValue);
-                        setIsExpanded(false);
+                        if (!isFutureMonth) {
+                            onChange(monthValue);
+                            setIsExpanded(false);
+                        }
                     }}
+                    disabled={isFutureMonth}
                     className={`
                         p-2 text-xs font-medium rounded-md transition-colors
-                        ${isSelected 
-                            ? 'bg-sky-500 text-white' 
-                            : isCurrentMonth
-                                ? 'bg-sky-100 text-sky-600 dark:bg-sky-600/20 dark:text-sky-300'
-                                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:text-slate-900 dark:hover:text-white'
+                        ${isFutureMonth
+                            ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-slate-600'
+                            : isSelected 
+                                ? 'bg-sky-500 text-white' 
+                                : isCurrentMonth
+                                    ? 'bg-sky-100 text-sky-600 dark:bg-sky-600/20 dark:text-sky-300'
+                                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:text-slate-900 dark:hover:text-white'
                         }
                     `}
                 >
@@ -134,7 +147,14 @@ export const InlineMonthPicker: React.FC<InlineMonthPickerProps> = ({
                         </span>
                         <button
                             onClick={() => setViewYear(viewYear + 1)}
-                            className="p-1 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
+                            disabled={viewYear >= new Date().getFullYear()}
+                            className={`
+                                p-1 transition-colors
+                                ${viewYear >= new Date().getFullYear()
+                                    ? 'opacity-40 cursor-not-allowed text-slate-400 dark:text-slate-600'
+                                    : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                                }
+                            `}
                         >
                             <ChevronRightIcon className="w-4 h-4" />
                         </button>

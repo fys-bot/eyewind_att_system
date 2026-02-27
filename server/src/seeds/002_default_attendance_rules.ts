@@ -36,6 +36,7 @@ export async function seed(knex: Knex): Promise<void> {
     lateExemptionCount: 3,
     lateExemptionMinutes: 15,
     lateExemptionEnabled: true,
+    lateExemptionMode: 'byDate',
     performancePenaltyMode: 'capped',
     unlimitedPenaltyThresholdTime: '09:01',
     unlimitedPenaltyCalcType: 'perMinute',
@@ -127,6 +128,7 @@ export async function seed(knex: Knex): Promise<void> {
     lateExemptionCount: 0,
     lateExemptionMinutes: 0,
     lateExemptionEnabled: true,
+    lateExemptionMode: 'byDate',
     performancePenaltyMode: 'capped',
     unlimitedPenaltyThresholdTime: '09:11',
     unlimitedPenaltyCalcType: 'perMinute',
@@ -175,8 +177,7 @@ export async function seed(knex: Knex): Promise<void> {
       remoteDays: []
     },
     crossDayCheckout: {
-      enabled: false,
-      rules: []
+      enabled: false
     }
   };
 

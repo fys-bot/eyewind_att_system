@@ -39,6 +39,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         createdAt: new Date().toISOString()
       };
       
+      // 🔥 保存用户信息到 localStorage，供日志管理等功能使用
+      localStorage.setItem('currentUser', JSON.stringify(user));
+      
       onLogin(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : '用户名或密码错误');

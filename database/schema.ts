@@ -63,6 +63,7 @@ export interface AttendanceRuleConfig {
     lateExemptionCount: number; // 3 (月度豁免次数)
     lateExemptionMinutes: number; // 15 (单次豁免时长)
     lateExemptionEnabled: boolean; // true (是否启用豁免功能)
+    lateExemptionMode: 'byDate' | 'byMinutes'; // 'byDate'=按日期从月初到月末, 'byMinutes'=按迟到分钟数从大到小
     
     // 绩效扣款规则
     performancePenaltyMode: 'unlimited' | 'capped'; // unlimited=上不封顶模式, capped=封顶模式
@@ -316,6 +317,7 @@ export interface EmployeeStats {
     exemptedLate?: number;
     performancePenalty?: number;
     monthlyExemptionUsed?: number;
+    lateRecords?: Array<{ day: number; minutes: number; isWorkday: boolean }>; // 临时存储迟到记录，用于豁免计算
     annualHours: number;
     sickHours: number;
     seriousSickHours: number; // 新增：病假(>24h)小时数

@@ -5,7 +5,7 @@ import { Loader2Icon, RefreshCwIcon, DownloadIcon, UsersIcon, CalendarIcon, Send
 import { useAttendanceStats } from './useAttendanceStats.ts';
 import { useAttendanceRuleSync } from '../../../hooks/useAttendanceRuleSync.ts';
 import { AttendanceRuleManager } from '../AttendanceRuleEngine.ts';
-import useAttendanceRuleConfig, { initRuleConfigCache, refreshRuleConfigCache } from '../../../hooks/useAttendanceRuleConfig.ts';
+import { initRuleConfigCache, refreshRuleConfigCache } from '../../../hooks/useAttendanceRuleConfig.ts';
 import { CompanyDashboardView } from './AttendanceDashboard.tsx';
 import { AttendanceCalendarView } from './AttendanceCalendar.tsx';
 import { EmployeeTableView } from './AttendanceEmployeeList.tsx';
@@ -51,13 +51,10 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   const [analysisEmployee, setAnalysisEmployee] = useState<{ user: DingTalkUser; stats: EmployeeStats } | null>(null);
 
   // 推送功能状态
-  const DEFAULT_WEBHOOK = 'https://oapi.dingtalk.com/robot/send?access_token=0601fe473c98d2900349a9f93bd86c799b4446d0456acb15ce0b2ea61f9d818d';
   const [showPushModal, setShowPushModal] = useState(false);
   const [pushWebhook, setPushWebhook] = useState(() => {
-    return localStorage.getItem('attendance_push_webhook') || DEFAULT_WEBHOOK;
+    return localStorage.getItem('attendance_push_webhook') || '';
   });
-  const [isWebhookEditable, setIsWebhookEditable] = useState(false);
-  const [showWebhookConfirmModal, setShowWebhookConfirmModal] = useState(false);
   const [pushContent, setPushContent] = useState('');
   const [isPushing, setIsPushing] = useState(false);
   const [pushResult, setPushResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -75,24 +72,8 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   const [showCustomDownloadModal, setShowCustomDownloadModal] = useState(false);
   const [customDownloadCompany, setCustomDownloadCompany] = useState<string>('');
   
-  // CSV预览功能状态
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [previewTabs, setPreviewTabs] = useState<Array<{ name: string; headers: string[]; rows: string[][] }>>([]);
-  const [activePreviewTab, setActivePreviewTab] = useState(0);
-  const [previewFileName, setPreviewFileName] = useState<string>('');
-  const [previewDownloadCallback, setPreviewDownloadCallback] = useState<(() => void) | null>(null);
-  
   // 编辑日志弹窗状态
   const [showEditLogsModal, setShowEditLogsModal] = useState(false);
-  
-  // 字段搜索状态
-  const [columnSearchQuery, setColumnSearchQuery] = useState('');
-  
-  // 日期列模式：'none' | 'attendance' | 'late'
-  const [dateColumnMode, setDateColumnMode] = useState<'none' | 'attendance' | 'late'>(() => {
-    const saved = localStorage.getItem('attendance_date_column_mode');
-    return (saved as 'none' | 'attendance' | 'late') || 'none';
-  });
   
   const [selectedColumns, setSelectedColumns] = useState<string[]>(() => {
     const saved = localStorage.getItem('attendance_custom_columns');
@@ -116,7 +97,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     { key: 'shouldAttendanceDays', label: '应出勤天数', group: '出勤统计' },
     { key: 'actualAttendanceDays', label: '实际出勤天数', group: '出勤统计' },
     { key: 'isFullAttendance', label: '是否全勤', group: '出勤统计' },
-    { key: 'attendanceDates', label: '考勤日期', group: '出勤统计' },
     
     // 迟到相关
     { key: 'late', label: '迟到次数', group: '迟到相关' },
@@ -124,7 +104,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     { key: 'exemptedLate', label: '豁免后迟到次数', group: '迟到相关' },
     { key: 'exemptedLateMinutes', label: '豁免后迟到分钟数', group: '迟到相关' },
     { key: 'performancePenalty', label: '绩效扣款金额', group: '迟到相关' },
-    { key: 'lateDates', label: '迟到日期', group: '迟到相关' },
     
     // 缺卡相关
     { key: 'missing', label: '缺卡次数', group: '缺卡相关' },
@@ -908,7 +887,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   }, [companyNames, activeCompany]);
 
   // Handle Download Logic
-  const handleDownloadReports = async (companyName: string, isPreview = false) => {
+  const handleDownloadReports = async (companyName: string) => {
     if (!canExport) {
         alert("您没有权限下载报表。");
         return;
@@ -922,23 +901,17 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             return;
         }
         
-        // 预览模式不支持全部公司
-        if (isPreview) {
-            alert('预览模式不支持下载全部公司，请选择单个公司');
-            return;
-        }
-        
         // 为每个公司生成报表并打包
         for (const company of allCompanies) {
-            await downloadSingleCompanyReport(company, false);
+            await downloadSingleCompanyReport(company);
         }
         return;
     }
     
-    await downloadSingleCompanyReport(companyName, isPreview);
+    await downloadSingleCompanyReport(companyName);
   };
   
-  const downloadSingleCompanyReport = async (companyName: string, isPreview = false) => {
+  const downloadSingleCompanyReport = async (companyName: string) => {
     const employees = companyEmployeeStats[companyName] || [];
     if (employees.length === 0) { 
         if (companyName !== '全部') {
@@ -950,17 +923,15 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     // 🔥 获取带薪福利假配置（从规则引擎获取）
     const downloadCompanyKey = (companyName === 'hydodo' || companyName.includes('海多多')) ? 'hydodo' : 'eyewind';
     const downloadRuleEngine = AttendanceRuleManager.getEngine(downloadCompanyKey);
-    const downloadRuleConfig = (downloadRuleEngine as any).rules; // 访问内部配置
+    const downloadRuleConfig = (downloadRuleEngine as any).config; // 访问内部配置
     
     const benefitHolidayMap = new Map<string, string>(); // 日期 -> 原因的映射
     const customDays = downloadRuleConfig?.workdaySwapRules?.customDays || [];
-    
     customDays.forEach((day: any) => {
-      if (day.type === 'holiday' && day.reason?.includes('福利假')) {
-        benefitHolidayMap.set(day.date, day.reason);
-      }
+        if (day.type === 'holiday' && day.reason?.includes('福利假')) {
+            benefitHolidayMap.set(day.date, day.reason);
+        }
     });
-    console.log({ benefitHolidayMap, customDays,  })
 
     // Log Audit Event
     // if (currentUserInfo) {
@@ -1101,10 +1072,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         `${fullMonthStr},${','.repeat(daysInMonth + 5)}本月记薪日 ${employees.filter(e => e.stats.actualAttendanceDays > 0).length}天,${','.repeat(4)}`,
         `序号,姓名,${dayHeaders.join(',')},正常出勤天数,是否全勤,豁免后迟到分钟数,迟到分钟数,备注,年假(小时),事假(小时),病假(小时 <24),病假(小时 >24),调休(小时),产假(小时),陪产假(小时),婚假(小时),丧假(小时)`,
         `,,${Array.from({ length: daysInMonth }, (_, i) => {
-            const day = i + 1;
-            
-            // 否则显示星期
-            const date = new Date(year, parseInt(monthStr) - 1, day);
+            const date = new Date(year, parseInt(monthStr) - 1, i + 1);
             const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
             return dayNames[date.getDay()];
         }).join(',')},本月合计,,,,,,,,,,,,,`,
@@ -1122,8 +1090,8 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 if (targetDate > currentDate) {
                     return '';
                 }
-
-               // 🔥 优先检查是否为带薪福利假
+                
+                // 🔥 优先检查是否为带薪福利假
                 const benefitHolidayReason = benefitHolidayMap.get(fullDateKey);
                 if (benefitHolidayReason) {
                     return benefitHolidayReason;
@@ -1221,14 +1189,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         `${companyDisplayName}迟到统计表,${','.repeat(daysInMonth + 15)}`,
         `${fullMonthStr},${','.repeat(daysInMonth + 15)}`,
         `序号,姓名,${dayHeaders.join(',')},豁免后迟到分钟数,豁免后迟到次数,迟到总分总数,迟到次数,加班到19:30累计时长,加班到20:30累计时长,加班到22:00累计时长,加班到24:00累计时长,加班总时长(19:30前不算),加班19:30次数,加班20:30次数,加班22:00次数,加班24:00次数,上午缺卡次数,下午缺卡次数`,
-        `,,${Array.from({ length: daysInMonth }, (_, i) => {
-            const day = i + 1;
-            
-            // 否则显示星期
-            const date = new Date(year, parseInt(monthStr) - 1, day);
-            const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
-            return dayNames[date.getDay()];
-        }).join(',')},,,,,,,,,,,,,,,`,
         ...employees.map((emp, index) => {
             const { user, stats } = emp;
             // 🔥 完全按照考勤日历的逻辑生成每日迟到状态
@@ -1317,47 +1277,203 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 // 检查迟到
                 const lateRecord = statusData.records.find(r => r.checkType === 'OnDuty' && r.timeResult === 'Late');
                 if (lateRecord) {
-                    // 🔥 使用规则引擎计算迟到分钟数
-                    const companyKey = (user.mainCompany?.includes('海多多') || user.mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
-                    const ruleEngine = AttendanceRuleManager.getEngine(companyKey);
-                    
-                    // 获取前一天的下班打卡时间（用于跨天规则）
-                    const previousDay = day - 1;
-                    let previousDayCheckoutTime: Date | undefined;
-                    if (previousDay > 0) {
-                        const prevDayData = userAttendance?.[previousDay];
-                        if (prevDayData && prevDayData.records) {
-                            const offDutyRecords = prevDayData.records
-                                .filter(r => r.checkType === 'OffDuty')
-                                .sort((a, b) => new Date(b.userCheckTime).getTime() - new Date(a.userCheckTime).getTime());
-                            if (offDutyRecords.length > 0) {
-                                previousDayCheckoutTime = new Date(offDutyRecords[0].userCheckTime);
-                            }
-                        }
-                    }
-                    
-                    // 获取请假详情
-                    const processRecord = statusData.records.find(r => r.procInstId);
-                    const processDetail = processRecord && processDataMap[processRecord.procInstId] 
-                        ? processDataMap[processRecord.procInstId] 
-                        : undefined;
-                    
-                    const lateMinutes = ruleEngine.calculateLateMinutes(
-                        lateRecord,
-                        targetDate,
-                        previousDayCheckoutTime,
-                        undefined, // previousWeekendCheckoutTime
-                        undefined, // previousMonthCheckoutTime
-                        holidays,
-                        processDetail,
-                        user.name
-                    );
-                    
-                    return lateMinutes > 0 ? `迟到${lateMinutes}分钟` : '迟到';
+                    // 这里可以添加迟到分钟数的显示，但需要使用规则引擎计算
+                    return '迟到';
                 }
                 
                 // 正常出勤
                 return '√';
+            });
+                // 未来日期显示空白
+                if (targetDate > currentDate) {
+                    return '';
+                }
+                
+                // 🔥 优先检查是否为带薪福利假
+                const benefitHolidayReason = benefitHolidayMap.get(fullDateKey);
+                if (benefitHolidayReason) {
+                    return benefitHolidayReason;
+                }
+                
+                // 检查是否为假期
+                const holidayInfo = holidays[dateKey];
+                if (holidayInfo && holidayInfo.holiday === true) {
+                    return '-';
+                }
+                
+                // 🔧 使用正确的数据结构获取考勤数据
+                const userAttendance = attendanceMap[user.userid]; // 使用 userid 而不是 id
+                const dayAttendance = userAttendance?.[day]; // 使用 day 数字而不是 dateKey
+                
+                // 检查是否为周末（但不是补班日）
+                const isWeekend = targetDate.getDay() === 0 || targetDate.getDay() === 6;
+                
+                if (dayAttendance && dayAttendance.records) {
+                    // 检查请假记录
+                    const processRecord = dayAttendance.records.find(r => r.procInstId);
+                    if (processRecord && processDataMap[processRecord.procInstId]) {
+                        const processData = processDataMap[processRecord.procInstId];
+                        const leaveType = processData.formValues?.leaveType || processData.bizType;
+                        if (leaveType) {
+                            const typeMapping: Record<string, string> = {
+                                '年假': '年假',
+                                '病假': '病假',
+                                '事假': '事假',
+                                '出差': '出差',
+                                '外出': '外出',
+                                '调休': '调休',
+                                '丧假': '丧假',
+                                '陪产假': '陪产假',
+                                '产假': '产假',
+                                '育儿假': '育儿假',
+                                '婚假': '婚假'
+                            };
+                            return typeMapping[leaveType] || leaveType;
+                        }
+                    }
+                    
+                    // 🔥 优先检查加班（周末或节假日有打卡记录）
+                    if (isWeekend || (holidayInfo && holidayInfo.holiday === true)) {
+                        const onDutyRecord = dayAttendance.records.find(r => r.checkType === 'OnDuty');
+                        const offDutyRecord = dayAttendance.records.find(r => r.checkType === 'OffDuty');
+                        if (onDutyRecord && offDutyRecord) {
+                            const workHours = (new Date(offDutyRecord.userCheckTime).getTime() - new Date(onDutyRecord.userCheckTime).getTime()) / (1000 * 60 * 60);
+                            if (workHours > 0) {
+                                return `加班${workHours.toFixed(1)}小时`;
+                            }
+                        }
+                    }
+                    
+                    // 检查缺卡情况
+                    const hasOnDuty = dayAttendance.records.some(r => r.checkType === 'OnDuty' && r.timeResult !== 'NotSigned');
+                    const hasOffDuty = dayAttendance.records.some(r => r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned');
+                    
+                    if (!hasOnDuty && !hasOffDuty) {
+                        return '上午缺卡\n下午缺卡';
+                    } else if (!hasOnDuty) {
+                        return '上午缺卡';
+                    } else if (!hasOffDuty) {
+                        return '下午缺卡';
+                    }
+                    
+                    // 检查迟到情况 - 🔥 使用规则引擎计算迟到分钟数
+                    const lateRecord = dayAttendance.records.find(r => r.checkType === 'OnDuty' && r.timeResult === 'Late');
+                    if (lateRecord) {
+                        // 获取审批详情
+                        const processRecord = dayAttendance.records.find(r => r.procInstId);
+                        const processDetail = processRecord?.procInstId ? processDataMap[processRecord.procInstId] : undefined;
+                        
+                        // 🔥 使用规则引擎计算迟到分钟数
+                        const companyKey = (user.mainCompany?.includes('海多多') || user.mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
+                        const ruleEngine = AttendanceRuleManager.getEngine(companyKey);
+                        
+                        // 构造工作日期
+                        const workDate = new Date(year, parseInt(monthStr) - 1, day);
+                        
+                        // 查找前一天的下班打卡时间
+                        let previousDayCheckoutTime: Date | undefined;
+                        if (day > 1) {
+                            const prevDayAttendance = attendanceMap[user.userid]?.[day - 1];
+                            if (prevDayAttendance) {
+                                const offDutyRecords = prevDayAttendance.records.filter(r => 
+                                    r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                );
+                                if (offDutyRecords.length > 0) {
+                                    const latestOffDuty = offDutyRecords.reduce((latest, current) => {
+                                        return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                    });
+                                    previousDayCheckoutTime = new Date(latestOffDuty.userCheckTime);
+                                }
+                            }
+                        }
+                        
+                        // 查找上周末或周五的下班打卡时间（用于跨周规则，仅周一需要）
+                        let previousWeekendCheckoutTime: Date | undefined;
+                        const currentDayOfWeek = workDate.getDay();
+                        
+                        if (currentDayOfWeek === 1) { // 周一
+                            const { saturday, sunday } = ruleEngine.getPreviousWeekend(workDate);
+                            
+                            // 查找周日的下班打卡
+                            const sundayDay = sunday.getDate();
+                            const sundayAttendance = attendanceMap[user.userid]?.[sundayDay];
+                            if (sundayAttendance) {
+                                const sundayOffDuty = sundayAttendance.records.filter(r => 
+                                    r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                );
+                                if (sundayOffDuty.length > 0) {
+                                    const latestSundayOffDuty = sundayOffDuty.reduce((latest, current) => {
+                                        return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                    });
+                                    previousWeekendCheckoutTime = new Date(latestSundayOffDuty.userCheckTime);
+                                }
+                            }
+                            
+                            // 如果周日没有打卡，查找周六
+                            if (!previousWeekendCheckoutTime) {
+                                const saturdayDay = saturday.getDate();
+                                const saturdayAttendance = attendanceMap[user.userid]?.[saturdayDay];
+                                if (saturdayAttendance) {
+                                    const saturdayOffDuty = saturdayAttendance.records.filter(r => 
+                                        r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                    );
+                                    if (saturdayOffDuty.length > 0) {
+                                        const latestSaturdayOffDuty = saturdayOffDuty.reduce((latest, current) => {
+                                            return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                        });
+                                        previousWeekendCheckoutTime = new Date(latestSaturdayOffDuty.userCheckTime);
+                                    }
+                                }
+                            }
+                            
+                            // 如果周末都没有打卡，查找周五
+                            if (!previousWeekendCheckoutTime) {
+                                const friday = new Date(workDate);
+                                friday.setDate(workDate.getDate() - 3);
+                                const fridayDay = friday.getDate();
+                                const fridayAttendance = attendanceMap[user.userid]?.[fridayDay];
+                                if (fridayAttendance) {
+                                    const fridayOffDuty = fridayAttendance.records.filter(r => 
+                                        r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
+                                    );
+                                    if (fridayOffDuty.length > 0) {
+                                        const latestFridayOffDuty = fridayOffDuty.reduce((latest, current) => {
+                                            return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
+                                        });
+                                        previousWeekendCheckoutTime = new Date(latestFridayOffDuty.userCheckTime);
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 使用规则引擎计算迟到分钟数
+                        const lateMinutes = ruleEngine.calculateLateMinutes(
+                            lateRecord,
+                            workDate,
+                            previousDayCheckoutTime,
+                            previousWeekendCheckoutTime,
+                            undefined, // previousMonthCheckoutTime - 下载报表不需要跨月规则
+                            holidays,
+                            processDetail,
+                            user.name
+                        );
+                        
+                        if (lateMinutes > 0) {
+                            return `迟到${lateMinutes}分钟`;
+                        }
+                    }
+                    
+                    // 正常出勤
+                    return '√';
+                }
+                
+                // 🔥 只有在没有考勤记录的情况下，周末才显示'-'
+                if (isWeekend && (!holidayInfo || holidayInfo.holiday !== false)) {
+                    return '-';
+                }
+                
+                // 工作日无考勤记录，可能是旷工
+                return '旷工';
             });
             
             return [
@@ -1432,164 +1548,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     
     zip.file(`${parseInt(monthStr)}月考勤绩效统计.csv`, createCSV(performanceContent));
 
-    // 🔥 预览模式：解析三个CSV文件并显示预览
-    if (isPreview) {
-        const tabs = [];
-        
-        // 将CSV内容中引号内的换行符替换为特殊标记，便于后续处理
-        const NEWLINE_PLACEHOLDER = '<<<NEWLINE>>>';
-        
-        const cleanCsvContent = (content: string): string => {
-            let result = '';
-            let inQuotes = false;
-            
-            for (let i = 0; i < content.length; i++) {
-                const char = content[i];
-                
-                if (char === '"') {
-                    if (inQuotes && content[i + 1] === '"') {
-                        // 双引号转义
-                        result += '""';
-                        i++;
-                    } else {
-                        // 切换引号状态
-                        inQuotes = !inQuotes;
-                        result += char;
-                    }
-                } else if ((char === '\n' || char === '\r') && inQuotes) {
-                    // 引号内的换行符替换为占位符
-                    if (char === '\n') {
-                        result += NEWLINE_PLACEHOLDER;
-                    }
-                    // 忽略 \r
-                } else {
-                    result += char;
-                }
-            }
-            
-            return result;
-        };
-        
-        // 清理CSV内容
-        const cleanedAttendance = cleanCsvContent(attendanceContent);
-        const cleanedLate = cleanCsvContent(lateContent);
-        const cleanedPerformance = cleanCsvContent(performanceContent);
-        
-        // 解析考勤表
-        const attendanceLines = cleanedAttendance.split('\n');
-        const attendanceHeaders = attendanceLines[2].split(',').map(h => h.replace(/^"|"$/g, ''));
-        const attendanceRows = attendanceLines.slice(4, Math.min(54, attendanceLines.length))
-            .filter(line => line.trim())
-            .map(line => {
-                const cells: string[] = [];
-                let currentCell = '';
-                let inQuotes = false;
-                
-                for (let i = 0; i < line.length; i++) {
-                    const char = line[i];
-                    if (char === '"') {
-                        if (inQuotes && line[i + 1] === '"') {
-                            currentCell += '"';
-                            i++;
-                        } else {
-                            inQuotes = !inQuotes;
-                        }
-                    } else if (char === ',' && !inQuotes) {
-                        // 将占位符转换回换行符
-                        cells.push(currentCell.replace(new RegExp(NEWLINE_PLACEHOLDER, 'g'), '\n'));
-                        currentCell = '';
-                    } else {
-                        currentCell += char;
-                    }
-                }
-                // 将占位符转换回换行符
-                cells.push(currentCell.replace(new RegExp(NEWLINE_PLACEHOLDER, 'g'), '\n'));
-                return cells;
-            });
-        tabs.push({ name: '考勤表', headers: attendanceHeaders, rows: attendanceRows });
-        
-        // 解析迟到统计表
-        const lateLines = cleanedLate.split('\n');
-        const lateHeaders = lateLines[2].split(',').map(h => h.replace(/^"|"$/g, ''));
-        const lateRows = lateLines.slice(4, Math.min(54, lateLines.length))
-            .filter(line => line.trim())
-            .map(line => {
-                const cells: string[] = [];
-                let currentCell = '';
-                let inQuotes = false;
-                
-                for (let i = 0; i < line.length; i++) {
-                    const char = line[i];
-                    if (char === '"') {
-                        if (inQuotes && line[i + 1] === '"') {
-                            currentCell += '"';
-                            i++;
-                        } else {
-                            inQuotes = !inQuotes;
-                        }
-                    } else if (char === ',' && !inQuotes) {
-                        cells.push(currentCell.replace(new RegExp(NEWLINE_PLACEHOLDER, 'g'), '\n'));
-                        currentCell = '';
-                    } else {
-                        currentCell += char;
-                    }
-                }
-                cells.push(currentCell.replace(new RegExp(NEWLINE_PLACEHOLDER, 'g'), '\n'));
-                return cells;
-            });
-        tabs.push({ name: '迟到统计表', headers: lateHeaders, rows: lateRows });
-        
-        // 解析考勤绩效统计表
-        const performanceLines = cleanedPerformance.split('\n');
-        const performanceHeaders = performanceLines[1].split(',').map(h => h.replace(/^"|"$/g, ''));
-        const performanceRows = performanceLines.slice(2, Math.min(52, performanceLines.length))
-            .filter(line => line.trim())
-            .map(line => {
-                const cells: string[] = [];
-                let currentCell = '';
-                let inQuotes = false;
-                
-                for (let i = 0; i < line.length; i++) {
-                    const char = line[i];
-                    if (char === '"') {
-                        if (inQuotes && line[i + 1] === '"') {
-                            currentCell += '"';
-                            i++;
-                        } else {
-                            inQuotes = !inQuotes;
-                        }
-                    } else if (char === ',' && !inQuotes) {
-                        cells.push(currentCell.replace(new RegExp(NEWLINE_PLACEHOLDER, 'g'), '\n'));
-                        currentCell = '';
-                    } else {
-                        currentCell += char;
-                    }
-                }
-                cells.push(currentCell.replace(new RegExp(NEWLINE_PLACEHOLDER, 'g'), '\n'));
-                return cells;
-            });
-        tabs.push({ name: '考勤绩效统计', headers: performanceHeaders, rows: performanceRows });
-        
-        const companyPrefix = companyName === 'eyewind' ? '风眼' : companyName === 'hydodo' ? '海多多' : companyName;
-        setPreviewFileName(`${companyPrefix}_${parseInt(monthStr)}月考勤报表.zip`);
-        setPreviewTabs(tabs);
-        setActivePreviewTab(0);
-        
-        // 保存下载回调
-        setPreviewDownloadCallback(() => async () => {
-            try {
-                const content = await zip.generateAsync({ type: "blob" });
-                saveAs(content, `${companyPrefix}_${parseInt(monthStr)}月考勤报表.zip`);
-            } catch (error) {
-                console.error("Download failed:", error);
-                alert("打包下载失败，请重试");
-            }
-        });
-        
-        setShowPreviewModal(true);
-        return;
-    }
-
     try {
         const content = await zip.generateAsync({ type: "blob" });
         const companyPrefix = companyName === 'eyewind' ? '风眼' : companyName === 'hydodo' ? '海多多' : companyName;
@@ -1660,7 +1618,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   // 打开自定义下载弹窗
   const handleOpenCustomDownload = (companyName: string) => {
     setCustomDownloadCompany(companyName);
-    setColumnSearchQuery(''); // 重置搜索框
     setShowCustomDownloadModal(true);
   };
 
@@ -1690,7 +1647,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   };
 
   // 执行自定义下载
-  const handleCustomDownload = (isPreview = false) => {
+  const handleCustomDownload = () => {
     if (!canExport) {
       alert("您没有权限下载报表。");
       return;
@@ -1699,20 +1656,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     const targetCompany = customDownloadCompany === '全部' ? Object.keys(companyEmployeeStats) : [customDownloadCompany];
     const [y, m] = globalMonth.split('-').map(Number);
     const daysInMonth = new Date(y, m, 0).getDate();
-    
-    // 🔥 获取带薪福利假配置（从规则引擎获取）
-    const downloadCompanyKey = (customDownloadCompany === 'hydodo' || customDownloadCompany.includes('海多多')) ? 'hydodo' : 'eyewind';
-    const downloadRuleEngine = AttendanceRuleManager.getEngine(downloadCompanyKey);
-    const downloadRuleConfig = (downloadRuleEngine as any).rules;
-    
-    const benefitHolidayMap = new Map<string, string>();
-    const customDays = downloadRuleConfig?.workdaySwapRules?.customDays || [];
-    
-    customDays.forEach((day: any) => {
-      if (day.type === 'holiday' && day.reason?.includes('福利假')) {
-        benefitHolidayMap.set(day.date, day.reason);
-      }
-    });
     
     // 生成员工备注的辅助函数
     const generateRemarks = (user: DingTalkUser, stats: EmployeeStats): string => {
@@ -1773,17 +1716,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         const col = availableColumns.find(c => c.key === key);
         return col?.label || key;
       });
-      
-      // 根据日期列模式添加日期列表头
-      if (dateColumnMode !== 'none') {
-        for (let d = 1; d <= daysInMonth; d++) {
-          if (dateColumnMode === 'attendance') {
-            headers.push(`${d}号考勤`);
-          } else if (dateColumnMode === 'late') {
-            headers.push(`${d}号`); // 迟到模式只显示日期
-          }
-        }
-      }
 
       // 生成数据行
       const rows = employees.map(({ user, stats }: { user: DingTalkUser; stats: EmployeeStats }) => {
@@ -1793,11 +1725,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
           (stats.maternityHours || 0) + (stats.paternityHours || 0) + (stats.marriageHours || 0) + 
           (stats.bereavementHours || 0) + (stats.parentalHours || 0) + (stats.tripHours || 0);
         
-        const userId = user.userid;
-        const userAttendance = attendanceMap[userId];
-        
-        // 生成基础列数据
-        const row = selectedColumns.map(key => {
+        return selectedColumns.map(key => {
           switch (key) {
             // 基本信息
             case 'name': return user.name;
@@ -1807,8 +1735,9 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             case 'mainCompany': return user.mainCompany || '-';
             case 'mobile': return user.mobile || '-';
             case 'hiredDate': 
-                const hd = new Date(user.hired_date);
-                return isNaN(hd.getTime()) ? '-' : hd.toLocaleDateString('zh-CN');
+              if (!user.hired_date) return '-';
+              const hd = typeof user.hired_date === 'number' ? new Date(user.hired_date) : new Date(user.hired_date);
+              return isNaN(hd.getTime()) ? '-' : hd.toLocaleDateString('zh-CN');
             case 'userid': return user.userid || '-';
             case 'active': return user.active === false ? '离职' : '在职';
             
@@ -1816,24 +1745,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             case 'shouldAttendanceDays': return stats.shouldAttendanceDays || 0;
             case 'actualAttendanceDays': return stats.actualAttendanceDays || 0;
             case 'isFullAttendance': return stats.isFullAttendance ? '是' : '否';
-            case 'attendanceDates': {
-              // 生成考勤日期列表
-              const userId = user.userid;
-              const userAttendance = attendanceMap[userId];
-              if (!userAttendance) return '-';
-              
-              const attendanceDates: string[] = [];
-              const monthStr = String(m).padStart(2, '0');
-              
-              for (let d = 1; d <= daysInMonth; d++) {
-                const daily = userAttendance[d];
-                if (daily && (daily.status === 'normal' || daily.status === 'abnormal')) {
-                  attendanceDates.push(`${y}-${monthStr}-${String(d).padStart(2, '0')}`);
-                }
-              }
-              
-              return attendanceDates.length > 0 ? attendanceDates.join('; ') : '-';
-            }
             
             // 迟到相关
             case 'late': return stats.late || 0;
@@ -1841,35 +1752,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             case 'exemptedLate': return stats.exemptedLate || 0;
             case 'exemptedLateMinutes': return stats.exemptedLateMinutes || 0;
             case 'performancePenalty': return stats.performancePenalty?.toFixed(2) || '0.00';
-            case 'lateDates': {
-              // 生成迟到日期列表
-              const userId = user.userid;
-              const userAttendance = attendanceMap[userId];
-              if (!userAttendance) return '-';
-              
-              const lateDates: string[] = [];
-              const monthStr = String(m).padStart(2, '0');
-              
-              for (let d = 1; d <= daysInMonth; d++) {
-                const daily = userAttendance[d];
-                if (!daily || !daily.records) continue;
-                
-                // 检查是否有迟到记录
-                const onDutyRecords = daily.records.filter((r: any) => r.checkType === 'OnDuty');
-                if (onDutyRecords.length > 0) {
-                  const firstOnDuty = onDutyRecords.sort((a: any, b: any) => 
-                    new Date(a.userCheckTime).getTime() - new Date(b.userCheckTime).getTime()
-                  )[0];
-                  
-                  // 检查是否迟到（timeResult === 'Late'）
-                  if (firstOnDuty.timeResult === 'Late') {
-                    lateDates.push(`${y}-${monthStr}-${String(d).padStart(2, '0')}`);
-                  }
-                }
-              }
-              
-              return lateDates.length > 0 ? lateDates.join('; ') : '-';
-            }
             
             // 缺卡相关
             case 'missing': return stats.missing || 0;
@@ -1906,128 +1788,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             default: return '-';
           }
         });
-        
-        // 根据日期列模式添加每日数据
-        if (dateColumnMode !== 'none') {
-          for (let d = 1; d <= daysInMonth; d++) {
-            const daily = userAttendance?.[d];
-            
-            if (dateColumnMode === 'attendance') {
-              // 考勤模式：显示考勤状态和请假信息
-              if (!daily) {
-                row.push('-');
-              } else {
-                const monthStr = String(m).padStart(2, '0');
-                const fullDateKey = `${y}-${monthStr}-${String(d).padStart(2, '0')}`;
-                
-                // 🔥 优先检查是否为带薪福利假
-                const benefitHolidayReason = benefitHolidayMap.get(fullDateKey);
-                if (benefitHolidayReason) {
-                  row.push(benefitHolidayReason);
-                } else {
-                  // 检查是否有请假记录
-                  const procRecord = daily.records?.find((r: any) => r.procInstId);
-                  let leaveInfo = '';
-                  
-                  if (procRecord && processDataMap[procRecord.procInstId]) {
-                    const p = processDataMap[procRecord.procInstId];
-                    const leaveType = p.formValues?.leaveType || p.bizType;
-                    const duration = p.formValues?.duration || 0;
-                    const unit = p.formValues?.durationUnit || p.formValues?.unit || '';
-                    
-                    if (leaveType && duration > 0) {
-                      let hours = duration;
-                      if (unit.includes('day') || unit.includes('天')) {
-                        hours = duration * 8;
-                      }
-                      leaveInfo = `${leaveType}${hours}h`;
-                    }
-                  }
-                  
-                  // 优先显示请假信息，其次显示考勤状态
-                  if (leaveInfo) {
-                    row.push(leaveInfo);
-                  } else if (daily.status === 'normal') {
-                    row.push('✓'); // 正常出勤显示对号
-                  } else if (daily.status === 'abnormal') {
-                    row.push('异常');
-                  } else if (daily.status === 'incomplete') {
-                    row.push('缺卡');
-                  } else if (daily.status === 'noRecord') {
-                    row.push('-');
-                  } else {
-                    row.push('-');
-                  }
-                }
-              }
-            } else if (dateColumnMode === 'late') {
-              // 迟到模式：显示迟到分钟数
-              if (!daily || !daily.records) {
-                row.push('-');
-              } else {
-                const onDutyRecords = daily.records.filter((r: any) => r.checkType === 'OnDuty');
-                if (onDutyRecords.length === 0) {
-                  row.push('-');
-                } else {
-                  const firstOnDuty = onDutyRecords.sort((a: any, b: any) => 
-                    new Date(a.userCheckTime).getTime() - new Date(b.userCheckTime).getTime()
-                  )[0];
-                  
-                  if (firstOnDuty.timeResult === 'Late') {
-                    // 计算迟到分钟数
-                    const userTime = new Date(firstOnDuty.userCheckTime);
-                    const baseTime = firstOnDuty.baseCheckTime ? new Date(firstOnDuty.baseCheckTime) : null;
-                    
-                    if (baseTime) {
-                      const diffMs = userTime.getTime() - baseTime.getTime();
-                      const diffMinutes = Math.floor(diffMs / (1000 * 60));
-                      row.push(diffMinutes > 0 ? `迟到${diffMinutes}分钟` : '-');
-                    } else {
-                      row.push('迟到');
-                    }
-                  } else {
-                    row.push('-');
-                  }
-                }
-              }
-            }
-          }
-        }
-        
-        return row;
       });
-
-      // 🔥 预览模式：显示预览弹窗
-      if (isPreview) {
-        const fileName = `${companyDisplayName}_${globalMonth}_自定义报表.csv`;
-        setPreviewFileName(fileName);
-        setPreviewTabs([{ 
-          name: '自定义报表',
-          headers, 
-          rows: rows.slice(0, 50).map(row => row.map(val => String(val))) // 只预览前50行，保留换行符
-        }]);
-        setActivePreviewTab(0);
-        
-        // 保存下载回调
-        setPreviewDownloadCallback(() => () => {
-          // 生成 CSV 内容
-          const csvContent = '\ufeff' + [
-            headers.map(h => `"${h}"`).join(','),
-            ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
-          ].join('\n');
-
-          // 下载文件
-          const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-          const link = document.createElement('a');
-          link.href = URL.createObjectURL(blob);
-          link.download = fileName;
-          link.click();
-          URL.revokeObjectURL(link.href);
-        });
-        
-        setShowPreviewModal(true);
-        return;
-      }
 
       // 生成 CSV 内容
       const csvContent = '\ufeff' + [
@@ -2056,16 +1817,13 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     //   });
     // }
 
-    if (!isPreview) {
-      setShowCustomDownloadModal(false);
-    }
+    setShowCustomDownloadModal(false);
   };
 
   // 打开推送弹窗
   const handleOpenPushModal = () => {
     setPushContent(generateDefaultPushContent());
     setPushResult(null);
-    setIsWebhookEditable(false); // 重置为锁定状态
     setShowPushModal(true);
   };
 
@@ -2528,52 +2286,23 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                   Webhook 地址
                   <span className="text-slate-400 font-normal ml-2">(支持钉钉机器人)</span>
                 </label>
-                <div className="flex gap-2">
-                  <input
-                    type="url"
-                    value={pushWebhook}
-                    onChange={(e) => handleWebhookChange(e.target.value)}
-                    placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
-                    disabled={!isWebhookEditable}
-                    className={`flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all ${
-                      webhookError 
-                        ? 'border-red-400 dark:border-red-500' 
-                        : 'border-slate-200 dark:border-slate-700'
-                    } ${!isWebhookEditable ? 'opacity-60 cursor-not-allowed' : ''}`}
-                  />
-                  <button
-                    onClick={() => {
-                      if (!isWebhookEditable) {
-                        // 开启编辑模式，显示确认对话框
-                        setShowWebhookConfirmModal(true);
-                      } else {
-                        // 关闭编辑模式
-                        setIsWebhookEditable(false);
-                      }
-                    }}
-                    className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
-                      isWebhookEditable
-                        ? 'bg-emerald-600 text-white hover:bg-emerald-500'
-                        : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600'
-                    }`}
-                  >
-                    {isWebhookEditable ? '锁定' : '编辑'}
-                  </button>
-                </div>
+                <input
+                  type="url"
+                  value={pushWebhook}
+                  onChange={(e) => handleWebhookChange(e.target.value)}
+                  placeholder="https://oapi.dingtalk.com/robot/send?access_token=..."
+                  className={`w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all ${
+                    webhookError 
+                      ? 'border-red-400 dark:border-red-500' 
+                      : 'border-slate-200 dark:border-slate-700'
+                  }`}
+                />
                 {webhookError && (
                   <p className="text-xs text-red-500 dark:text-red-400 flex items-center gap-1">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     {webhookError}
-                  </p>
-                )}
-                {!isWebhookEditable && (
-                  <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                    Webhook 地址已锁定，点击"编辑"按钮可修改
                   </p>
                 )}
               </div>
@@ -2797,75 +2526,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         </div>
       )}
 
-      {/* Webhook 编辑确认对话框 */}
-      {showWebhookConfirmModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md border border-slate-200 dark:border-slate-700">
-            {/* 头部 */}
-            <div className="flex items-start gap-4 p-6 border-b border-slate-200 dark:border-slate-700">
-              <div className="flex-shrink-0 w-12 h-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-                <svg className="w-6 h-6 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
-                  修改 Webhook 地址
-                </h3>
-                <p className="text-sm text-slate-600 dark:text-slate-400">
-                  请确认以下信息后再继续操作
-                </p>
-              </div>
-            </div>
-
-            {/* 内容 */}
-            <div className="p-6 space-y-4">
-              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <svg className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <div className="flex-1 text-sm text-amber-800 dark:text-amber-300">
-                    <p className="font-semibold mb-2">重要提示</p>
-                    <ul className="space-y-1.5 list-disc list-inside">
-                      <li>请确认 Webhook 地址指向<span className="font-bold">财务群</span>的机器人</li>
-                      <li>配置错误可能导致考勤报告推送到其他群组</li>
-                      <li>建议先在测试群验证后再修改正式地址</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 dark:bg-slate-900/50 rounded-lg p-4">
-                <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">当前 Webhook 地址</p>
-                <p className="text-sm text-slate-700 dark:text-slate-300 font-mono break-all">
-                  {pushWebhook}
-                </p>
-              </div>
-            </div>
-
-            {/* 底部按钮 */}
-            <div className="flex items-center justify-end gap-3 px-6 py-4 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-200 dark:border-slate-700 rounded-b-xl">
-              <button
-                onClick={() => setShowWebhookConfirmModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => {
-                  setIsWebhookEditable(true);
-                  setShowWebhookConfirmModal(false);
-                }}
-                className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors shadow-sm"
-              >
-                确认修改
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 自定义下载弹窗 */}
       {showCustomDownloadModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -2882,316 +2542,84 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 </div>
               </div>
               <button
-                onClick={() => {
-                  setShowCustomDownloadModal(false);
-                  setColumnSearchQuery(''); // 重置搜索框
-                }}
+                onClick={() => setShowCustomDownloadModal(false)}
                 className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
               >
                 <XIcon className="w-5 h-5" />
               </button>
             </div>
 
-            {/* 弹窗内容 - 左右布局 */}
-            <div className="flex-1 overflow-hidden flex gap-4 p-4">
-              {/* 左侧：已选字段列表 - 支持拖拽排序 */}
-              <div className="w-2/5 flex flex-col border-r border-slate-200 dark:border-slate-700 pr-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                    已选字段 ({selectedColumns.length})
-                  </h4>
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-                  拖拽调整顺序，点击 × 移除
-                </p>
-                
-                <div className="flex-1 overflow-y-auto space-y-2">
-                  {selectedColumns.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-full text-slate-400 dark:text-slate-500">
-                      <svg className="w-12 h-12 mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <p className="text-sm">请从右侧选择字段</p>
-                    </div>
-                  ) : (
-                    selectedColumns.map((colKey, index) => {
-                      const col = availableColumns.find(c => c.key === colKey);
-                      if (!col) return null;
-                      
-                      return (
-                        <div
-                          key={colKey}
-                          draggable={!col.required}
-                          onDragStart={(e) => {
-                            e.dataTransfer.effectAllowed = 'move';
-                            e.dataTransfer.setData('text/plain', index.toString());
-                          }}
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = 'move';
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
-                            const toIndex = index;
-                            
-                            if (fromIndex !== toIndex) {
-                              const newColumns = [...selectedColumns];
-                              const [movedItem] = newColumns.splice(fromIndex, 1);
-                              newColumns.splice(toIndex, 0, movedItem);
-                              setSelectedColumns(newColumns);
-                              localStorage.setItem('attendance_custom_columns', JSON.stringify(newColumns));
-                            }
-                          }}
-                          className={`flex items-center gap-2 p-2.5 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 ${
-                            col.required ? 'opacity-75' : 'cursor-move hover:border-blue-400 dark:hover:border-blue-600 hover:shadow-md'
-                          } transition-all group`}
-                        >
-                          <svg className="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
-                          </svg>
-                          <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded text-xs font-semibold">
-                            {index + 1}
-                          </span>
-                          <span className="flex-1 text-sm text-slate-700 dark:text-slate-300 truncate">
-                            {col.label}
-                            {col.required && <span className="text-xs text-slate-400 ml-1">(必选)</span>}
-                          </span>
-                          {!col.required && (
-                            <button
-                              onClick={() => toggleColumn(colKey)}
-                              className="flex-shrink-0 p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 rounded hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100"
-                              title="移除"
-                            >
-                              <XIcon className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+            {/* 弹窗内容 */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {/* 全选/取消全选 */}
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-200 dark:border-slate-700">
+                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  已选择 {selectedColumns.length} / {availableColumns.length} 个字段
+                </span>
+                <button
+                  onClick={toggleAllColumns}
+                  className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                >
+                  {selectedColumns.length === availableColumns.length ? '取消全选' : '全选'}
+                </button>
               </div>
 
-              {/* 右侧：可选字段 */}
-              <div className="flex-1 flex flex-col overflow-hidden">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                    可选字段
-                  </h4>
-                  <button
-                    onClick={toggleAllColumns}
-                    className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
-                  >
-                    {selectedColumns.length === availableColumns.length ? '取消全选' : '全选'}
-                  </button>
-                </div>
+              {/* 按分组显示字段 */}
+              {['基本信息', '出勤统计', '迟到相关', '缺卡相关', '请假统计', '加班统计', '其他'].map(groupName => {
+                const groupColumns = availableColumns.filter(col => col.group === groupName);
+                if (groupColumns.length === 0) return null;
                 
-                {/* 搜索框 */}
-                <div className="mb-3">
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={columnSearchQuery}
-                      onChange={(e) => setColumnSearchQuery(e.target.value)}
-                      placeholder="搜索字段..."
-                      className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                    />
-                    <svg 
-                      className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400"
-                      fill="none" 
-                      stroke="currentColor" 
-                      viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                    {columnSearchQuery && (
-                      <button
-                        onClick={() => setColumnSearchQuery('')}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded transition-colors"
-                      >
-                        <XIcon className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto">
-                  {['基本信息', '出勤统计', '迟到相关', '缺卡相关', '请假统计', '加班统计', '其他'].map(groupName => {
-                    const groupColumns = availableColumns.filter(col => {
-                      // 先按分组过滤
-                      if (col.group !== groupName) return false;
-                      // 再按搜索关键词过滤
-                      if (columnSearchQuery) {
-                        const query = columnSearchQuery.toLowerCase();
-                        return col.label.toLowerCase().includes(query) || col.key.toLowerCase().includes(query);
-                      }
-                      return true;
-                    });
-                    if (groupColumns.length === 0) return null;
-                    
-                    return (
-                      <div key={groupName} className="mb-4">
-                        <h5 className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2 sticky top-0 bg-white dark:bg-slate-800 py-1">
-                          {groupName}
-                        </h5>
-                        <div className="grid grid-cols-2 gap-2">
-                          {groupColumns.map(col => (
-                            <label
-                              key={col.key}
-                              className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition-all ${
-                                selectedColumns.includes(col.key)
-                                  ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'
-                                  : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                              } ${col.required ? 'opacity-75' : ''}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selectedColumns.includes(col.key)}
-                                onChange={() => toggleColumn(col.key)}
-                                disabled={col.required}
-                                className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50 flex-shrink-0"
-                              />
-                              <span className={`text-xs flex-1 ${
-                                selectedColumns.includes(col.key)
-                                  ? 'text-blue-700 dark:text-blue-300 font-medium'
-                                  : 'text-slate-600 dark:text-slate-400'
-                              }`}>
-                                {col.label}
-                                {col.required && <span className="text-slate-400 ml-1">(必选)</span>}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  
-                  {/* 日期列选项 */}
-                  <div className="mb-4 border-t border-slate-200 dark:border-slate-700 pt-4">
-                    <h5 className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2 sticky top-0 bg-white dark:bg-slate-800 py-1">
-                      日期列
-                    </h5>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-                      选择是否添加每日详细数据列（1号-31号）
-                    </p>
-                    <div className="space-y-2">
-                      <label className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-all ${
-                        dateColumnMode === 'none'
-                          ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'
-                          : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                      }`}>
-                        <input
-                          type="radio"
-                          name="dateColumnMode"
-                          checked={dateColumnMode === 'none'}
-                          onChange={() => {
-                            setDateColumnMode('none');
-                            localStorage.setItem('attendance_date_column_mode', 'none');
-                          }}
-                          className="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 flex-shrink-0"
-                        />
-                        <div className="flex-1">
-                          <span className={`text-sm font-medium ${
-                            dateColumnMode === 'none'
-                              ? 'text-blue-700 dark:text-blue-300'
-                              : 'text-slate-700 dark:text-slate-300'
+                return (
+                  <div key={groupName} className="mb-4">
+                    <h4 className="text-sm font-medium text-slate-500 dark:text-slate-400 mb-2">{groupName}</h4>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                      {groupColumns.map(col => (
+                        <label
+                          key={col.key}
+                          className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                            selectedColumns.includes(col.key)
+                              ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'
+                              : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
+                          } ${col.required ? 'opacity-75' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedColumns.includes(col.key)}
+                            onChange={() => toggleColumn(col.key)}
+                            disabled={col.required}
+                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50"
+                          />
+                          <span className={`text-xs ${
+                            selectedColumns.includes(col.key)
+                              ? 'text-blue-700 dark:text-blue-300 font-medium'
+                              : 'text-slate-600 dark:text-slate-400'
                           }`}>
-                            无
+                            {col.label}
+                            {col.required && <span className="text-slate-400 ml-1">(必选)</span>}
                           </span>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            不添加日期列
-                          </p>
-                        </div>
-                      </label>
-                      
-                      <label className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-all ${
-                        dateColumnMode === 'attendance'
-                          ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'
-                          : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                      }`}>
-                        <input
-                          type="radio"
-                          name="dateColumnMode"
-                          checked={dateColumnMode === 'attendance'}
-                          onChange={() => {
-                            setDateColumnMode('attendance');
-                            localStorage.setItem('attendance_date_column_mode', 'attendance');
-                          }}
-                          className="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 flex-shrink-0"
-                        />
-                        <div className="flex-1">
-                          <span className={`text-sm font-medium ${
-                            dateColumnMode === 'attendance'
-                              ? 'text-blue-700 dark:text-blue-300'
-                              : 'text-slate-700 dark:text-slate-300'
-                          }`}>
-                            考勤
-                          </span>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            添加每日考勤状态列（✓=正常，带薪福利假，年假/事假等）
-                          </p>
-                        </div>
-                      </label>
-                      
-                      <label className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer transition-all ${
-                        dateColumnMode === 'late'
-                          ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'
-                          : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
-                      }`}>
-                        <input
-                          type="radio"
-                          name="dateColumnMode"
-                          checked={dateColumnMode === 'late'}
-                          onChange={() => {
-                            setDateColumnMode('late');
-                            localStorage.setItem('attendance_date_column_mode', 'late');
-                          }}
-                          className="w-4 h-4 text-blue-600 border-slate-300 focus:ring-blue-500 flex-shrink-0"
-                        />
-                        <div className="flex-1">
-                          <span className={`text-sm font-medium ${
-                            dateColumnMode === 'late'
-                              ? 'text-blue-700 dark:text-blue-300'
-                              : 'text-slate-700 dark:text-slate-300'
-                          }`}>
-                            迟到
-                          </span>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                            添加每日迟到分钟数列（如：迟到15分钟）
-                          </p>
-                        </div>
-                      </label>
+                        </label>
+                      ))}
                     </div>
                   </div>
-                </div>
-              </div>
+                );
+              })}
             </div>
 
             {/* 弹窗底部 */}
             <div className="flex items-center justify-end gap-3 p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
               <button
-                onClick={() => {
-                  setShowCustomDownloadModal(false);
-                  setColumnSearchQuery(''); // 重置搜索框
-                }}
+                onClick={() => setShowCustomDownloadModal(false)}
                 className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
               >
                 取消
               </button>
               <button
-                onClick={() => handleCustomDownload(true)}
+                onClick={handleCustomDownload}
                 disabled={selectedColumns.length === 0}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed rounded-lg shadow-sm transition-all"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-                <span>预览</span>
+                <DownloadIcon className="w-4 h-4" />
+                <span>下载报表</span>
               </button>
             </div>
           </div>
@@ -3207,139 +2635,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
               onClose={() => setShowEditLogsModal(false)}
               isModal={true}
             />
-          </div>
-        </div>
-      )}
-
-      {/* CSV预览弹窗 */}
-      {showPreviewModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-[95vw] max-h-[90vh] flex flex-col">
-            {/* 弹窗头部 */}
-            <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-sky-100 dark:bg-sky-900/30 rounded-lg">
-                  <svg className="w-5 h-5 text-sky-600 dark:text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                  </svg>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">CSV报表预览</h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">预览前50行数据，支持左右滑动查看完整内容</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowPreviewModal(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-              >
-                <XIcon className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Tab切换 */}
-            {previewTabs.length > 1 && (
-              <div className="flex items-center gap-2 px-4 pt-4 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
-                {previewTabs.map((tab, index) => (
-                  <button
-                    key={index}
-                    onClick={() => setActivePreviewTab(index)}
-                    className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-all ${
-                      activePreviewTab === index
-                        ? 'bg-white dark:bg-slate-800 text-sky-600 dark:text-sky-400 border-b-2 border-sky-600 dark:border-sky-400'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700/50'
-                    }`}
-                  >
-                    {tab.name}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* 文件名编辑 */}
-            <div className="px-4 pt-4 pb-2 flex-shrink-0">
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                文件名
-              </label>
-              <input
-                type="text"
-                value={previewFileName}
-                onChange={(e) => setPreviewFileName(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none transition-all"
-              />
-            </div>
-
-            {/* 表格预览 - 支持横向滚动 */}
-            <div className="flex-1 overflow-hidden p-4 min-h-0">
-              <div className="h-full border border-slate-200 dark:border-slate-700 rounded-lg overflow-auto">
-                {previewTabs[activePreviewTab] && (
-                  <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-xs">
-                    <thead className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
-                      <tr>
-                        {previewTabs[activePreviewTab].headers.map((header, idx) => (
-                          <th
-                            key={idx}
-                            className="px-3 py-2 text-left font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap border-r border-slate-200 dark:border-slate-700 last:border-r-0"
-                          >
-                            {header}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                      {previewTabs[activePreviewTab].rows.map((row, rowIdx) => (
-                        <tr key={rowIdx} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                          {row.map((cell, cellIdx) => {
-                            // 检查是否是备注列（通常在第7或第8列，包含"备注"关键字）
-                            const isRemarkColumn = previewTabs[activePreviewTab].headers[cellIdx]?.includes('备注');
-                            
-                            return (
-                              <td
-                                key={cellIdx}
-                                className={`px-3 py-2 text-slate-600 dark:text-slate-400 border-r border-slate-100 dark:border-slate-700 last:border-r-0 ${
-                                  isRemarkColumn ? 'whitespace-pre-line' : 'whitespace-nowrap'
-                                }`}
-                                style={isRemarkColumn ? { maxWidth: '400px', minWidth: '200px' } : {}}
-                                title={cell}
-                              >
-                                {cell}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-              {previewTabs[activePreviewTab] && previewTabs[activePreviewTab].rows.length >= 50 && (
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 text-center">
-                  仅显示前50行数据，完整数据请下载查看
-                </p>
-              )}
-            </div>
-
-            {/* 弹窗底部 */}
-            <div className="flex items-center justify-end gap-3 p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
-              <button
-                onClick={() => setShowPreviewModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
-              >
-                取消
-              </button>
-              <button
-                onClick={() => {
-                  if (previewDownloadCallback) {
-                    previewDownloadCallback();
-                    setShowPreviewModal(false);
-                  }
-                }}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-lg shadow-sm transition-all"
-              >
-                <DownloadIcon className="w-4 h-4" />
-                <span>下载</span>
-              </button>
-            </div>
           </div>
         </div>
       )}

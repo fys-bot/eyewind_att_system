@@ -387,27 +387,24 @@ export const useAttendanceStats = (
 
             const userAttendance = attendanceMap[user.userid];
             if (userAttendance) {
-                // Fix: Iterate using entries to get the day even if records are missing, though usually attendanceMap has entries
-                Object.values(userAttendance).forEach((daily: DailyAttendanceStatus) => {
-                    // 🔥 修复：从 workDate 字符串中解析日期，避免时区问题
-                    // workDate 格式通常是时间戳（number）或 "YYYY-MM-DD" 字符串
-                    if (daily.records.length === 0 || !daily.records[0]?.workDate) return;
+                // 🔥 修复：使用 Object.entries 遍历，直接使用 key 作为工作日期的天数
+                // attendanceMap 的结构是 {[day]: DailyAttendanceStatus}，key 就是正确的工作日期
+                Object.entries(userAttendance).forEach(([dayKey, daily]: [string, DailyAttendanceStatus]) => {
+                    // 🔥 修复：直接使用 attendanceMap 的 key 作为天数，而不是从 workDate 解析
+                    const day = parseInt(dayKey);
+                    const year = currentYear; // 使用查询参数中的年份
+                    const month = currentMonth; // 使用查询参数中的月份
                     
-                    const workDateValue: any = daily.records[0].workDate;
+                    // 🔥 构造正确的工作日期
+                    const workDate = new Date(year, month, day);
                     
-                    // 如果是 ISO 字符串格式 "YYYY-MM-DD"，手动解析避免 UTC 转换
-                    let workDate: Date;
-                    if (typeof workDateValue === 'string' && workDateValue.includes('-')) {
-                        const [y, m, d] = workDateValue.split('T')[0].split('-').map(Number);
-                        workDate = new Date(y, m - 1, d); // 月份从0开始
-                    } else {
-                        // 时间戳或其他格式
-                        workDate = new Date(workDateValue);
-                    }
-
-                    const day = workDate.getDate();
-                    const year = workDate.getFullYear();
-                    const month = workDate.getMonth();
+                    // 🔥 调试：记录 attendanceMap 的 key 和构造的工作日期
+                    // if (user.name === '张棣苍' && day <= 10) {
+                    //     console.log(`[调试-attendanceMap] ${user.name} dayKey=${dayKey}, day=${day}, 工作日期=${workDate.toISOString().split('T')[0]}, 打卡记录数=${daily.records.length}`);
+                    //     if (daily.records.length > 0) {
+                    //         console.log(`  第一条打卡记录: workDate=${daily.records[0].workDate}, userCheckTime=${daily.records[0].userCheckTime}`);
+                    //     }
+                    // }
                     
                     // 🔥 严格验证：只处理属于当前查询月份的数据
                     if (year !== currentYear || month !== currentMonth) {
@@ -503,7 +500,8 @@ export const useAttendanceStats = (
 
                         // 🔥 使用规则引擎计算迟到分钟数（支持跨天/跨周/跨月规则）
                         // 🔥 修复：每天只计算一次迟到，避免重复计算（一天可能有多条上班打卡记录）
-                        if (record.checkType === 'OnDuty' && record.timeResult === 'Late' && !hasProcessedLate) {
+                        // 🔥 重要：不依赖 timeResult，对所有 OnDuty 记录都计算迟到分钟数
+                        if (record.checkType === 'OnDuty' && !hasProcessedLate) {
                             hasProcessedLate = true; // 🔥 标记已处理，后续的迟到记录不再重复计算
                             
                             // 🔥 向前查询回调函数：查找前 N 天的下班打卡时间
@@ -511,38 +509,42 @@ export const useAttendanceStats = (
                                 const targetDate = new Date(workDate);
                                 targetDate.setDate(targetDate.getDate() - daysBack);
                                 const targetDay = targetDate.getDate();
-                                const targetYear = targetDate.getFullYear();
-                                const targetMonth = targetDate.getMonth();
                                 
-                                // 🔥 严格验证：只查找属于目标日期的打卡记录
-                                let targetDayAttendance = null;
-                                for (const [dayKey, dailyData] of Object.entries(userAttendance)) {
-                                    if (dailyData.records.length > 0) {
-                                        const recordWorkDate = dailyData.records[0].workDate;
-                                        const recordDate = parseWorkDate(recordWorkDate);
-                                        
-                                        if (recordDate.getFullYear() === targetYear && 
-                                            recordDate.getMonth() === targetMonth && 
-                                            recordDate.getDate() === targetDay) {
-                                            targetDayAttendance = dailyData;
-                                            break;
-                                        }
-                                    }
-                                }
+                                // console.log(`[lookbackCheckoutFinder] 查找前${daysBack}天的下班打卡`, {
+                                //     用户: user.name,
+                                //     当前日期: workDate.toISOString().split('T')[0],
+                                //     目标日期: targetDate.toISOString().split('T')[0],
+                                //     目标天数: targetDay,
+                                //     userAttendance可用天数: Object.keys(userAttendance)
+                                // });
+                                
+                                // 🔥 简化：直接使用天数访问 userAttendance，与 previousDayCheckoutTime 的逻辑一致
+                                const targetDayAttendance = userAttendance[String(targetDay)];
+                                
+                                // console.log(`[lookbackCheckoutFinder] targetDayAttendance:`, {
+                                //     存在: !!targetDayAttendance,
+                                //     记录数: targetDayAttendance?.records?.length || 0
+                                // });
                                 
                                 if (targetDayAttendance) {
                                     const offDutyRecords = targetDayAttendance.records.filter(r => 
                                         r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned'
                                     );
+                                    
+                                    // console.log(`[lookbackCheckoutFinder] 下班打卡记录数: ${offDutyRecords.length}`);
+                                    
                                     if (offDutyRecords.length > 0) {
                                         // 取最晚的下班打卡
                                         const latestOffDuty = offDutyRecords.reduce((latest, current) => {
                                             return new Date(current.userCheckTime) > new Date(latest.userCheckTime) ? current : latest;
                                         });
-                                        return new Date(latestOffDuty.userCheckTime);
+                                        const result = new Date(latestOffDuty.userCheckTime);
+                                        // console.log(`[lookbackCheckoutFinder] 找到下班打卡: ${result.toISOString()}`);
+                                        return result;
                                     }
                                 }
                                 
+                                // console.log(`[lookbackCheckoutFinder] 未找到下班打卡，返回 undefined`);
                                 return undefined;
                             };
                             
@@ -692,9 +694,9 @@ export const useAttendanceStats = (
                                 if (!isWorkDay) return false;
                                 
                                 // 🔥 调试：记录2月1-3日的判断过程
-                                if (month === 1 && day <= 3) {
-                                    console.log(`[跨月规则调试] ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}, 星期${workDate.getDay()}, isWorkDay=${isWorkDay}, 用户: ${user.name}`);
-                                }
+                                // if (month === 1 && day <= 3) {
+                                //     console.log(`[跨月规则调试] ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}, 星期${workDate.getDay()}, isWorkDay=${isWorkDay}, 用户: ${user.name}`);
+                                // }
                                 
                                 // 检查当前日期之前是否有工作日
                                 for (let d = 1; d < day; d++) {
@@ -714,14 +716,15 @@ export const useAttendanceStats = (
                                 }
                                 
                                 // 🔥 调试：记录判断结果
-                                if (month === 1 && day <= 3) {
-                                    console.log(`[跨月规则调试] ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')} 是本月第一个工作日！`);
-                                }
+                                // if (month === 1 && day <= 3) {
+                                //     console.log(`[跨月规则调试] ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')} 是本月第一个工作日！`);
+                                // }
                                 
                                 return true; // 当前日期是本月第一个工作日
                             })();
                             
                             if (isFirstWorkdayOfMonth) {
+                                // 🔥 调试：记录跨月规则检测
                                 // console.log(`[跨月规则] 检测到本月第一个工作日: ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}, 用户: ${user.name}`);
                                 
                                 // 🔥 从用户的所有打卡记录中找上个月的最后一条下班打卡
@@ -769,40 +772,47 @@ export const useAttendanceStats = (
                                 }
                             }
                             
-                            // 🔥 使用规则引擎计算迟到分钟数（传入 holidayMap 用于判断工作日）
+                            // 🔥 使用规则引擎计算迟到分钟数（根据考勤规则配置）
+                            // 构造正确的工作日期
+                            const correctWorkDate = new Date(year, month, day);
+                            
                             const minutes = ruleEngine.calculateLateMinutes(
                                 record,
-                                workDate,
+                                correctWorkDate,
                                 previousDayCheckoutTime,
                                 previousWeekendCheckoutTime,
                                 previousMonthCheckoutTime,
-                                holidays, // 🔥 传入节假日映射
-                                processDetail, // 🔥 新增：传入请假/调休审批详情
-                                user.name, // 🔥 传入员工名字用于日志
-                                lookbackCheckoutFinder // 🔥 传入向前查询回调函数
+                                holidays,
+                                processDetail,
+                                user.name,
+                                lookbackCheckoutFinder
                             );
                             
-                            if (minutes > 0) {
+                            // 🔥 重要：只有工作日才计算迟到，周末加班不计算迟到
+                            if (minutes > 0 && isWorkDay) {
                                 stats.late++;
                                 stats.lateMinutes += minutes;
                                 dailyTrendMapByCompany[company][day].late++;
 
-                                // 🔥 使用规则引擎计算豁免
-                                const currentRecordDate = new Date(year, month, day);
-                                const dayOfWeek = currentRecordDate.getDay();
-                                const isWorkday = dayOfWeek >= 1 && dayOfWeek <= 5; // 仅工作日参与豁免
+                                // 🔥 调试：记录迟到累加过程
+                                if (user.name === '岳可') {
+                                    console.log(`[迟到累加] ${user.name} - ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}: 本次迟到${minutes}分钟，累计迟到${stats.lateMinutes}分钟，isWorkDay=${isWorkDay}`);
+                                }
 
-                                const exemptionResult = ruleEngine.calculateExemptedLateMinutes(
-                                    minutes,
-                                    stats.monthlyExemptionUsed || 0,
-                                    isWorkday
-                                );
-
-                                stats.exemptedLateMinutes = (stats.exemptedLateMinutes || 0) + exemptionResult.exemptedMinutes;
-                                stats.monthlyExemptionUsed = exemptionResult.exemptionUsed;
-                                
-                                // Fix: Cast to any to bypass missing property in schema, as we cannot edit schema file.
-                                (stats as any).exemptedLate = ((stats as any).exemptedLate || 0) + 1;
+                                // 🔥 收集迟到记录，稍后统一计算豁免
+                                if (!stats.lateRecords) {
+                                    stats.lateRecords = [];
+                                }
+                                stats.lateRecords.push({
+                                    day: day,
+                                    minutes: minutes,
+                                    isWorkday: isWorkDay // 使用已经计算好的 isWorkDay 变量
+                                });
+                            } else if (minutes > 0 && !isWorkDay) {
+                                // 🔥 调试：记录周末加班不计算迟到
+                                if (user.name === '岳可') {
+                                    console.log(`[迟到跳过] ${user.name} - ${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}: 周末加班，不计算迟到（原本会计算${minutes}分钟）`);
+                                }
                             }
                         }
                     });
@@ -923,8 +933,7 @@ export const useAttendanceStats = (
             
             stats.actualAttendanceDays = Math.max(0, stats.shouldAttendanceDays - totalLeaveDays);
 
-            // 🔥 使用规则引擎计算绩效扣款（在所有日期处理完成后）
-            stats.performancePenalty = ruleEngine.calculatePerformancePenalty(stats.exemptedLateMinutes || 0);
+            // 🔥 注意：绩效扣款计算移到豁免计算之后（见下方）
 
             // 🔥 使用规则引擎判定全勤（在所有统计完成后）
             const fullAttendanceStats = {
@@ -999,6 +1008,63 @@ export const useAttendanceStats = (
                 }
             }
             
+            // 🔥 统一计算豁免（根据配置的豁免模式）
+            if (stats.lateRecords && stats.lateRecords.length > 0) {
+                const exemptionMode = ruleEngine.getRules().lateExemptionMode || 'byDate';
+                const maxExemptions = ruleEngine.getRules().lateExemptionCount;
+                const exemptionThreshold = ruleEngine.getRules().lateExemptionMinutes;
+                
+                // 🔥 调试：记录豁免计算前的状态
+                if (user.name === '岳可') {
+                    console.log(`[豁免计算] ${user.name} - 迟到记录:`, stats.lateRecords);
+                    console.log(`[豁免计算] ${user.name} - 累计迟到: ${stats.lateMinutes}分钟，豁免模式: ${exemptionMode}，最大豁免次数: ${maxExemptions}，豁免阈值: ${exemptionThreshold}分钟`);
+                }
+                
+                // 根据豁免模式排序迟到记录
+                let sortedLateRecords = [...stats.lateRecords];
+                if (exemptionMode === 'byMinutes') {
+                    // 按迟到分钟数从大到小排序
+                    sortedLateRecords.sort((a, b) => b.minutes - a.minutes);
+                } else {
+                    // 按日期从月初到月末排序（默认）
+                    sortedLateRecords.sort((a, b) => a.day - b.day);
+                }
+                
+                // 应用豁免
+                let exemptionUsed = 0;
+                stats.exemptedLateMinutes = 0;
+                
+                sortedLateRecords.forEach(record => {
+                    if (exemptionUsed < maxExemptions && record.isWorkday) {
+                        if (record.minutes <= exemptionThreshold) {
+                            // 完全豁免
+                            exemptionUsed++;
+                        } else {
+                            // 部分豁免
+                            stats.exemptedLateMinutes += (record.minutes - exemptionThreshold);
+                            exemptionUsed++;
+                        }
+                    } else {
+                        // 不豁免
+                        stats.exemptedLateMinutes += record.minutes;
+                    }
+                });
+                
+                stats.monthlyExemptionUsed = exemptionUsed;
+                (stats as any).exemptedLate = exemptionUsed;
+                
+                // 🔥 调试：记录豁免计算后的结果
+                if (user.name === '岳可') {
+                    console.log(`[豁免计算] ${user.name} - 豁免后迟到: ${stats.exemptedLateMinutes}分钟，已使用豁免次数: ${exemptionUsed}`);
+                }
+                
+                // 清理临时数据
+                delete stats.lateRecords;
+            }
+            
+            // 🔥 重要：在豁免计算完成后，再计算绩效扣款
+            stats.performancePenalty = ruleEngine.calculatePerformancePenalty(stats.exemptedLateMinutes || 0);
+            
             // 设置最终的全勤状态
             stats.isFullAttendance = engineFullAttendance;
             
@@ -1015,57 +1081,47 @@ export const useAttendanceStats = (
         });
 
 
-        // 优化排序逻辑：按照新的排序规则
-        // 1. 纪律危险人员 - 豁免后迟到分钟数倒序 - 无考勤风险（全勤候选）- 全勤 - 其他
+        // 🔥 优化排序逻辑：按照新的排序规则
+        // 排序优先级：旷工次数从高到低 → 豁免后迟到从高到低 → 累计迟到从高到低 → 缺卡次数从高到低 → 全勤
         Object.keys(statsByCompany).forEach(company => {
             statsByCompany[company].sort((a, b) => {
-                // 1. 纪律危险人员（有绩效扣款的）排在最前面
-                const aHasRisk = (a.stats.performancePenalty || 0) > 0;
-                const bHasRisk = (b.stats.performancePenalty || 0) > 0;
+                const aAbsenteeism = a.stats.absenteeism || 0;
+                const bAbsenteeism = b.stats.absenteeism || 0;
+                const aExemptedLate = a.stats.exemptedLateMinutes || 0;
+                const bExemptedLate = b.stats.exemptedLateMinutes || 0;
+                const aLateMinutes = a.stats.lateMinutes || 0;
+                const bLateMinutes = b.stats.lateMinutes || 0;
+                const aMissing = a.stats.missing || 0;
+                const bMissing = b.stats.missing || 0;
+                const aIsFullAttendance = a.stats.isFullAttendance;
+                const bIsFullAttendance = b.stats.isFullAttendance;
                 
-                if (aHasRisk && !bHasRisk) return -1;
-                if (!aHasRisk && bHasRisk) return 1;
-                
-                // 2. 如果都是纪律风险人员，按豁免后迟到分钟数倒序
-                if (aHasRisk && bHasRisk) {
-                    return (b.stats.exemptedLateMinutes || 0) - (a.stats.exemptedLateMinutes || 0);
+                // 1. 旷工次数从高到低（有旷工的排在最前面）
+                if (aAbsenteeism !== bAbsenteeism) {
+                    return bAbsenteeism - aAbsenteeism;
                 }
                 
-                // 3. 对于非风险人员，区分无考勤风险（全勤候选）、全勤、其他
-                if (!aHasRisk && !bHasRisk) {
-                    const aIsFullAttendance = a.stats.isFullAttendance;
-                    const bIsFullAttendance = b.stats.isFullAttendance;
-                    
-                    // 无考勤风险（全勤候选）：没有迟到、缺卡、请假等问题，但可能因为最后工作日等原因未达到全勤
-                    const aIsCandidate = !aIsFullAttendance && 
-                        (a.stats.exemptedLateMinutes || 0) === 0 && 
-                        (a.stats.missing || 0) === 0 && 
-                        (a.stats.absenteeism || 0) === 0 &&
-                        (a.stats.annual || 0) === 0 &&
-                        (a.stats.sick || 0) === 0 &&
-                        (a.stats.personal || 0) === 0;
-                    
-                    const bIsCandidate = !bIsFullAttendance && 
-                        (b.stats.exemptedLateMinutes || 0) === 0 && 
-                        (b.stats.missing || 0) === 0 && 
-                        (b.stats.absenteeism || 0) === 0 &&
-                        (b.stats.annual || 0) === 0 &&
-                        (b.stats.sick || 0) === 0 &&
-                        (b.stats.personal || 0) === 0;
-                    
-                    // 排序优先级：无考勤风险（全勤候选） > 全勤 > 其他
-                    if (aIsCandidate && !bIsCandidate && !bIsFullAttendance) return -1;
-                    if (!aIsCandidate && bIsCandidate && !aIsFullAttendance) return 1;
-                    
-                    if (aIsFullAttendance && !bIsFullAttendance && !bIsCandidate) return -1;
-                    if (!aIsFullAttendance && bIsFullAttendance && !aIsCandidate) return 1;
-                    
-                    // 同级别内按豁免后迟到分钟数倒序
-                    return (b.stats.exemptedLateMinutes || 0) - (a.stats.exemptedLateMinutes || 0);
+                // 2. 豁免后迟到从高到低
+                if (aExemptedLate !== bExemptedLate) {
+                    return bExemptedLate - aExemptedLate;
                 }
                 
-                // 4. 其他情况按豁免后迟到分钟数倒序
-                return (b.stats.exemptedLateMinutes || 0) - (a.stats.exemptedLateMinutes || 0);
+                // 3. 累计迟到从高到低
+                if (aLateMinutes !== bLateMinutes) {
+                    return bLateMinutes - aLateMinutes;
+                }
+                
+                // 4. 缺卡次数从高到低
+                if (aMissing !== bMissing) {
+                    return bMissing - aMissing;
+                }
+                
+                // 5. 全勤排在最后
+                if (aIsFullAttendance && !bIsFullAttendance) return 1;
+                if (!aIsFullAttendance && bIsFullAttendance) return -1;
+                
+                // 6. 其他情况保持原顺序
+                return 0;
             });
         });
 

@@ -159,10 +159,20 @@ export class AttendanceRuleEngine {
         userName?: string,
         lookbackCheckoutFinder?: (daysBack: number) => Date | undefined
     ): number {
-        // 基础校验：只处理上班打卡且迟到的记录
-        if (record.checkType !== 'OnDuty' || record.timeResult !== 'Late') {
-            return 0;
-        }
+        // // 🔥 调试：记录所有调用（不限用户）
+        // console.log(`[AttendanceRuleEngine.calculateLateMinutes] 被调用`, {
+        //     用户: userName,
+        //     日期: workDate.toISOString().split('T')[0],
+        //     checkType: record.checkType,
+        //     timeResult: record.timeResult,
+        //     打卡时间: record.userCheckTime
+        // });
+        
+        // // 基础校验：只处理上班打卡且迟到的记录
+        // if (record.checkType !== 'OnDuty' || record.timeResult !== 'Late') {
+        //     console.log(`[AttendanceRuleEngine.calculateLateMinutes] 跳过: checkType=${record.checkType}, timeResult=${record.timeResult}`);
+        //     return 0;
+        // }
 
         // // 🔥 调试：记录规则引擎的配置
         // const debugMonth = workDate.getMonth();
@@ -186,12 +196,8 @@ export class AttendanceRuleEngine {
         // 🔥 优先级1: 判断是否是本月第一个工作日 → 应用跨月规则
         const isFirstWorkdayOfMonth = this.isFirstWorkdayOfMonth(workDate, holidayMap);
         
-        // 🔥 调试：只记录徐怡的判断
         const month = workDate.getMonth();
         const day = workDate.getDate();
-        if (userName === '徐怡' && month === 1 && day <= 3) {
-            console.log(`[AttendanceRuleEngine] 跨月规则判断: ${workDate.toISOString().split('T')[0]}, isFirstWorkdayOfMonth=${isFirstWorkdayOfMonth}, previousMonthCheckoutTime=${previousMonthCheckoutTime ? '存在' : '不存在'}, 用户: ${userName}`);
-        }
         
         if (isFirstWorkdayOfMonth && previousMonthCheckoutTime) {
             const lateMinutes = this.applyLateRulesForCrossDay(
@@ -232,7 +238,7 @@ export class AttendanceRuleEngine {
             
             const maxLookbackDays = this.rules.crossDayCheckout.lookbackDays || 10;
             
-            for (let daysBack = 2; daysBack <= maxLookbackDays; daysBack++) {
+            for (let daysBack = 30; daysBack <= maxLookbackDays; daysBack++) {
                 const foundCheckoutTime = lookbackCheckoutFinder(daysBack);
                 if (foundCheckoutTime) {
                     effectivePreviousDayCheckoutTime = foundCheckoutTime;
@@ -256,7 +262,16 @@ export class AttendanceRuleEngine {
         }
         
         // 🔥 默认：使用标准工作开始时间计算迟到
-        return this.calculateDefaultLateMinutes(checkInTime, workDate, processDetail);
+        const defaultMinutes = this.calculateDefaultLateMinutes(checkInTime, workDate, processDetail);
+        
+        // // 🔥 调试：记录最终结果
+        // console.log(`[AttendanceRuleEngine] 计算完成`, {
+        //     用户: userName,
+        //     工作日期: workDate.toISOString().split('T')[0],
+        //     迟到分钟数: defaultMinutes
+        // });
+        
+        return defaultMinutes;
     }
 
     /**
@@ -271,50 +286,58 @@ export class AttendanceRuleEngine {
         processDetail?: any,
         userName?: string
     ): number | null {
-        const scenarioName = scenario === 'day' ? '跨天' : scenario === 'week' ? '跨周' : '跨月';
-        
-        // 🔥 只记录徐怡的日志
-        if (userName === '徐怡') {
-            console.log(`[AttendanceRuleEngine] 检查${scenarioName}打卡规则: ${workDate.toISOString().split('T')[0]}, 前一时段下班: ${previousCheckoutTime.toISOString()}, 员工: ${userName}`);
-        }
-        
         // 检查规则是否启用
         if (!this.rules.crossDayCheckout?.enabled) {
             return null;
         }
         
-        // 检查是否有 lateRules 配置
-        if (!this.rules.lateRules || this.rules.lateRules.length === 0) {
-            if (userName === '徐怡') {
-                console.log(`[AttendanceRuleEngine] 没有配置 lateRules，无法应用${scenarioName}规则`);
-            }
-            return null;
-        }
+        // 🔥 提取实际下班时间的小时和分钟（不考虑日期）
+        const checkoutHour = previousCheckoutTime.getHours();
+        const checkoutMinute = previousCheckoutTime.getMinutes();
+        const checkoutTimeInMinutes = checkoutHour * 60 + checkoutMinute;
         
         // 🔥 按 previousDayCheckoutTime 从晚到早排序（确保优先匹配最晚的规则）
         const sortedRules = [...this.rules.lateRules].sort((a, b) => 
             this.parseTime(b.previousDayCheckoutTime) - this.parseTime(a.previousDayCheckoutTime)
         );
         
-        if (userName === '徐怡') {
-            console.log(`[AttendanceRuleEngine] ${scenarioName}规则筛选结果:`, sortedRules.map(r => ({ 
-                previousDayCheckoutTime: r.previousDayCheckoutTime, 
-                lateThresholdTime: r.lateThresholdTime, 
-                description: r.description 
-            })));
+        // 🔥 特殊处理：如果实际下班时间是次日凌晨（即超过24:00），直接使用24:00规则
+        // 判断标准：如果下班时间的小时数在0-6之间，认为是次日凌晨
+        const isNextDayMorning = checkoutHour >= 0 && checkoutHour < 6;
+        
+        if (isNextDayMorning) {
+            // 查找24:00规则
+            const rule24 = this.rules.lateRules.find(r => r.previousDayCheckoutTime === '24:00');
+            
+            if (rule24) {
+                let thresholdTime = this.parseThresholdTime(workDate, rule24.lateThresholdTime);
+                
+                // 🔥 如果有请假/调休，检查请假结束时间
+                if (processDetail && processDetail.formValues) {
+                    const leaveEndTime = processDetail.formValues.endTime || processDetail.formValues.end;
+                    if (leaveEndTime) {
+                        const leaveEnd = new Date(leaveEndTime);
+                        const adjustedThreshold = this.adjustThresholdForLunchBreak(leaveEnd, workDate);
+                        
+                        if (adjustedThreshold.getTime() > thresholdTime.getTime()) {
+                            thresholdTime = adjustedThreshold;
+                        }
+                    }
+                }
+                
+                const lateMinutes = Math.max(0, Math.floor((checkInTime.getTime() - thresholdTime.getTime()) / 60000));
+                
+                return lateMinutes;
+            }
         }
         
-        // 找到第一个匹配的规则
+        // 🔥 正常流程：找到第一个匹配的规则（从最晚的规则开始）
         for (const rule of sortedRules) {
-            const ruleTime = this.parseRuleTime(previousCheckoutTime, rule.previousDayCheckoutTime);
+            const ruleTimeInMinutes = this.parseTime(rule.previousDayCheckoutTime);
             
-            // 🔥 只记录徐怡的时间比较
-            if (userName === '徐怡') {
-                console.log(`[AttendanceRuleEngine] ${scenarioName}规则匹配: 规则=${rule.previousDayCheckoutTime}, 规则时间=${ruleTime.toISOString()}, 实际下班=${previousCheckoutTime.toISOString()}, 比较结果=${previousCheckoutTime.getTime() >= ruleTime.getTime()}`);
-            }
-            
-            // 如果前一时段的下班时间 >= 规则阈值时间
-            if (previousCheckoutTime.getTime() >= ruleTime.getTime()) {
+            // 🔥 修复：只比较时间（小时:分钟），不考虑日期
+            // 如果实际下班时间（时分） >= 规则阈值时间（时分）
+            if (checkoutTimeInMinutes >= ruleTimeInMinutes) {
                 let thresholdTime = this.parseThresholdTime(workDate, rule.lateThresholdTime);
                 
                 // 🔥 如果有请假/调休，检查请假结束时间
@@ -326,24 +349,16 @@ export class AttendanceRuleEngine {
                         
                         if (adjustedThreshold.getTime() > thresholdTime.getTime()) {
                             thresholdTime = adjustedThreshold;
-                            if (userName === '徐怡') {
-                                console.log(`[AttendanceRuleEngine] 检测到请假结束时间，调整后的迟到基准: ${thresholdTime.toISOString()}`);
-                            }
                         }
                     }
                 }
                 
                 const lateMinutes = Math.max(0, Math.floor((checkInTime.getTime() - thresholdTime.getTime()) / 60000));
-                if (userName === '徐怡') {
-                    console.log(`[AttendanceRuleEngine] 应用${scenarioName}规则: ${rule.previousDayCheckoutTime}→${rule.lateThresholdTime}, 迟到${lateMinutes}分钟`);
-                }
+                
                 return lateMinutes;
             }
         }
         
-        if (userName === '徐怡') {
-            console.log(`[AttendanceRuleEngine] 前一时段下班时间未达到任何${scenarioName}规则阈值`);
-        }
         return null;
     }
 
@@ -398,26 +413,28 @@ export class AttendanceRuleEngine {
         let workStartTime = new Date(workDate);
         const [startHour, startMinute] = this.rules.workStartTime.split(':').map(Number);
         workStartTime.setHours(startHour, startMinute, 0, 0);
-        
+
         // 🔥 新增：如果有请假/调休，检查请假结束时间
         if (processDetail && processDetail.formValues) {
             const leaveEndTime = processDetail.formValues.endTime || processDetail.formValues.end;
             if (leaveEndTime) {
                 const leaveEnd = new Date(leaveEndTime);
-                
-                // 🔥 智能判断：如果请假结束时间在午休时间范围内，使用午休结束时间
                 const adjustedThreshold = this.adjustThresholdForLunchBreak(leaveEnd, workDate);
                 
-                // 如果调整后的时间晚于标准工作开始时间，使用调整后的时间作为基准
+                // 如果调整后的时间晚于标准工作开始时间，使用调整后的时间
                 if (adjustedThreshold.getTime() > workStartTime.getTime()) {
                     workStartTime = adjustedThreshold;
-                    // console.log(`[AttendanceRuleEngine] 检测到请假结束时间: ${leaveEndTime}, 调整后的迟到基准: ${workStartTime.toISOString()}`);
                 }
             }
         }
-        
+
         const lateMinutes = Math.max(0, Math.floor((checkInTime.getTime() - workStartTime.getTime()) / 60000));
-        // console.log(`[AttendanceRuleEngine] 使用默认工作时间: ${this.rules.workStartTime}, 迟到${lateMinutes}分钟`);
+        
+        // 🔥 调试：记录默认规则计算结果
+        // if (lateMinutes > 0) {
+        //     console.log(`[AttendanceRuleEngine] 使用默认规则: 工作开始时间${this.rules.workStartTime}, 迟到${lateMinutes}分钟`);
+        // }
+        
         return lateMinutes;
     }
 
@@ -495,7 +512,8 @@ export class AttendanceRuleEngine {
     }
 
     /**
-     * 计算豁免后的迟到分钟数
+     * 计算豁免后的迟到分钟数（单次迟到）
+     * @deprecated 建议使用 calculateMonthlyExemption 进行月度豁免计算
      */
     public calculateExemptedLateMinutes(
         lateMinutes: number,
@@ -528,6 +546,55 @@ export class AttendanceRuleEngine {
     }
 
     /**
+     * 计算月度豁免（支持按日期或按迟到时长排序）
+     * @param lateRecords 迟到记录数组 [{day: number, minutes: number, isWorkday: boolean}]
+     * @returns { exemptedLateMinutes: number, exemptionUsed: number }
+     */
+    public calculateMonthlyExemption(
+        lateRecords: Array<{ day: number; minutes: number; isWorkday: boolean }>
+    ): { exemptedLateMinutes: number; exemptionUsed: number } {
+        if (!lateRecords || lateRecords.length === 0) {
+            return { exemptedLateMinutes: 0, exemptionUsed: 0 };
+        }
+
+        const exemptionMode = this.rules.lateExemptionMode || 'byDate';
+        const maxExemptions = this.rules.lateExemptionCount;
+        const exemptionThreshold = this.rules.lateExemptionMinutes;
+
+        // 根据豁免模式排序迟到记录
+        let sortedLateRecords = [...lateRecords];
+        if (exemptionMode === 'byMinutes') {
+            // 按迟到分钟数从大到小排序
+            sortedLateRecords.sort((a, b) => b.minutes - a.minutes);
+        } else {
+            // 按日期从月初到月末排序（默认）
+            sortedLateRecords.sort((a, b) => a.day - b.day);
+        }
+
+        // 应用豁免
+        let exemptionUsed = 0;
+        let exemptedLateMinutes = 0;
+
+        sortedLateRecords.forEach(record => {
+            if (exemptionUsed < maxExemptions && record.isWorkday) {
+                if (record.minutes <= exemptionThreshold) {
+                    // 完全豁免
+                    exemptionUsed++;
+                } else {
+                    // 部分豁免
+                    exemptedLateMinutes += (record.minutes - exemptionThreshold);
+                    exemptionUsed++;
+                }
+            } else {
+                // 不豁免
+                exemptedLateMinutes += record.minutes;
+            }
+        });
+
+        return { exemptedLateMinutes, exemptionUsed };
+    }
+
+    /**
      * 计算绩效扣款（基于灵活的扣款规则）
      */
     public calculatePerformancePenalty(exemptedLateMinutes: number): number {
@@ -535,13 +602,40 @@ export class AttendanceRuleEngine {
 
         // 使用新的灵活扣款规则
         if (this.rules.performancePenaltyRules && this.rules.performancePenaltyRules.length > 0) {
-            for (const rule of this.rules.performancePenaltyRules) {
-                // 检查是否在当前规则的范围内 [minMinutes, maxMinutes)
-                if (exemptedLateMinutes >= rule.minMinutes && 
-                    (rule.maxMinutes === 999 || exemptedLateMinutes < rule.maxMinutes)) {
-                    const penalty = Math.min(rule.penalty, this.rules.maxPerformancePenalty);
-                    return penalty;
+            // 按照 minMinutes 从小到大排序
+            const sortedRules = [...this.rules.performancePenaltyRules].sort((a, b) => a.minMinutes - b.minMinutes);
+            
+            // 🔥 修复：找到最合适的规则（minMinutes <= exemptedLateMinutes < maxMinutes）
+            let matchedRule = null;
+            for (const rule of sortedRules) {
+                // 检查是否在范围内：minMinutes <= exemptedLateMinutes < maxMinutes
+                if (exemptedLateMinutes >= rule.minMinutes && exemptedLateMinutes < rule.maxMinutes) {
+                    matchedRule = rule;
+                    break; // 找到精确匹配，立即返回
                 }
+            }
+            
+            // 🔥 如果没有精确匹配，找到最后一个 minMinutes <= exemptedLateMinutes 的规则
+            // 这种情况通常是最后一个规则（如 [45, 999)）
+            if (!matchedRule) {
+                for (let i = sortedRules.length - 1; i >= 0; i--) {
+                    if (exemptedLateMinutes >= sortedRules[i].minMinutes) {
+                        matchedRule = sortedRules[i];
+                        break;
+                    }
+                }
+            }
+            
+            if (matchedRule) {
+                const penalty = Math.min(matchedRule.penalty, this.rules.maxPerformancePenalty);
+                
+                // 🔥 调试日志：记录匹配的规则
+                console.log(`[calculatePerformancePenalty] 豁免后迟到${exemptedLateMinutes}分钟，匹配规则: [${matchedRule.minMinutes}, ${matchedRule.maxMinutes}) → ${matchedRule.penalty}元，最终扣款: ${penalty}元`);
+                
+                return penalty;
+            } else {
+                // 🔥 调试日志：没有匹配的规则
+                console.warn(`[calculatePerformancePenalty] 豁免后迟到${exemptedLateMinutes}分钟，没有匹配的规则！规则列表:`, sortedRules);
             }
         }
 
@@ -554,6 +648,9 @@ export class AttendanceRuleEngine {
         else penalty = this.rules.maxPerformancePenalty;
 
         const finalPenalty = Math.min(penalty, this.rules.maxPerformancePenalty);
+        
+        console.log(`[calculatePerformancePenalty] 使用默认规则，豁免后迟到${exemptedLateMinutes}分钟 → ${finalPenalty}元`);
+        
         return finalPenalty;
     }
 

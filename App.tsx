@@ -148,13 +148,44 @@ const Sidebar: React.FC<{
 
             </nav>
 
-            <div className="mt-auto pt-2">
+            <div className="mt-auto pt-2 space-y-2">
+                {/* 当前登录用户信息 */}
+                {!isCollapsed && (
+                    <div className="px-4 py-3 bg-slate-50 dark:bg-slate-700/30 rounded-lg border border-slate-200 dark:border-slate-600">
+                        <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-full bg-sky-100 dark:bg-sky-900/30 flex items-center justify-center flex-shrink-0">
+                                <span className="text-sky-600 dark:text-sky-400 font-semibold text-sm">
+                                    {user.name.charAt(0).toUpperCase()}
+                                </span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-slate-900 dark:text-white truncate">
+                                    {user.name}
+                                </p>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                                    {user.roleName || '用户'}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                
+                {isCollapsed && (
+                    <div className="flex justify-center" title={`${user.name} (${user.roleName || '用户'})`}>
+                        <div className="w-8 h-8 rounded-full bg-sky-100 dark:bg-sky-900/30 flex items-center justify-center">
+                            <span className="text-sky-600 dark:text-sky-400 font-semibold text-sm">
+                                {user.name.charAt(0).toUpperCase()}
+                            </span>
+                        </div>
+                    </div>
+                )}
+
                 <SidebarItem icon={<LogOutIcon className="w-5 h-5" />} label="登出" isActive={false} onClick={onLogout} isCollapsed={isCollapsed} />
 
                 <button
                     onClick={onToggle}
                     aria-label={isMobile ? "关闭菜单" : (isCollapsed ? "展开侧边栏" : "收起侧边栏")}
-                    className={`w-full flex items-center gap-3 text-sm font-medium rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:text-slate-900 dark:hover:text-white mt-4 border-t border-slate-200 dark:border-slate-700 py-3 transition-colors ${isCollapsed ? 'justify-center px-3' : 'px-4'
+                    className={`w-full flex items-center gap-3 text-sm font-medium rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700/50 hover:text-slate-900 dark:hover:text-white border-t border-slate-200 dark:border-slate-700 py-3 transition-colors ${isCollapsed ? 'justify-center px-3' : 'px-4'
                         }`}
                 >
                     {isCollapsed ? <PanelLeftOpenIcon className="w-5 h-5" /> : <PanelLeftCloseIcon className="w-5 h-5" />}
@@ -266,7 +297,12 @@ const App: React.FC = () => {
         else if (loggedInUser.permissions?.includes('attendance_verification:view')) setPage('attendanceManagement');
         else setPage('help'); // Fallback
     };
-    const handleLogout = () => setUser(null);
+    
+    const handleLogout = () => {
+        // 🔥 清除 localStorage 中的用户信息
+        localStorage.removeItem('currentUser');
+        setUser(null);
+    };
 
     const handleNavigate = async (newPage: Page) => {
         if (newPage === 'attendanceManagement') {

@@ -19,6 +19,7 @@ interface ModelConfig {
         n: number;
         stream: boolean;
     };
+    prompt?: string;
     created_by?: string;
     uid?: string;
 }
@@ -29,6 +30,7 @@ interface AIModule {
     description: string;
     main_module: string;
     sub_module: string;
+    defaultPrompt: string;
 }
 
 // 定义项目中使用AI的模块
@@ -38,35 +40,40 @@ const AI_MODULES: AIModule[] = [
         name: 'AI 智能管理建议',
         description: '为员工提供个性化的考勤管理建议和改进方案',
         main_module: 'attendance',
-        sub_module: 'employee_advice'
+        sub_module: 'employee_advice',
+        defaultPrompt: '你是一位专业的HR顾问，请根据员工的考勤数据，提供个性化的管理建议和改进方案。分析员工的考勤模式，识别潜在问题，并给出具体可行的改进建议。'
     },
     {
         id: 'monthly_diagnosis',
         name: 'AI 智能月度诊断',
         description: '分析公司整体考勤情况，提供月度诊断报告和管理建议',
         main_module: 'attendance',
-        sub_module: 'monthly_diagnosis'
+        sub_module: 'monthly_diagnosis',
+        defaultPrompt: '你是一位资深的HR数据分析师，请分析公司整体的月度考勤情况，识别趋势和异常，提供诊断报告和管理建议。重点关注考勤健康度、团队表现差异、以及需要改进的领域。'
     },
     {
         id: 'calendar_analysis',
         name: 'AI 考勤异常分析',
         description: '分析员工考勤日历中的异常模式和规律',
         main_module: 'attendance',
-        sub_module: 'calendar_analysis'
+        sub_module: 'calendar_analysis',
+        defaultPrompt: '你是一位考勤数据分析专家，请分析员工考勤日历中的异常模式和规律。识别迟到、早退、缺卡等异常行为的模式，分析可能的原因，并提供改进建议。'
     },
     {
         id: 'team_analysis',
         name: 'AI 团队分析',
         description: '分析部门或团队的整体考勤健康度',
         main_module: 'attendance',
-        sub_module: 'team_analysis'
+        sub_module: 'team_analysis',
+        defaultPrompt: '你是一位团队管理顾问，请分析部门或团队的整体考勤健康度。评估团队的考勤表现，识别优秀实践和需要改进的地方，提供团队管理建议。'
     },
     {
         id: 'rule_analysis',
         name: 'AI 规则分析',
         description: '从HR专家视角分析考勤规则配置的合理性、员工体验和管理效能',
         main_module: 'attendance',
-        sub_module: 'rule_analysis'
+        sub_module: 'rule_analysis',
+        defaultPrompt: '你是一位HR政策专家，请从专业角度分析考勤规则配置的合理性。评估规则的公平性、可执行性、员工体验和管理效能，提供优化建议。'
     }
 ];
 
@@ -316,6 +323,8 @@ export const ModelManagement: React.FC = () => {
     const [successMessage, setSuccessMessage] = useState<string | null>(null);
     const [authToken, setAuthToken] = useState<string>('');
     const [isInitialLoading, setIsInitialLoading] = useState(true);
+    const [editingPrompts, setEditingPrompts] = useState<Map<string, string>>(new Map());
+    const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
 
     // Token缓存时间（5分钟）
     const TOKEN_CACHE_TIME = 5 * 60 * 1000;
@@ -562,6 +571,7 @@ export const ModelManagement: React.FC = () => {
         if (!module) return;
 
         const user = getCurrentUser();
+        const currentConfig = modelConfigs.get(moduleId);
 
         setLoading(prev => new Set(prev).add(moduleId));
         setError(null);
@@ -590,6 +600,7 @@ export const ModelManagement: React.FC = () => {
                     n: 1,
                     stream: false
                 },
+                prompt: currentConfig?.prompt || '',
                 created_by: user.name,
                 uid: user.uid
             };
@@ -611,10 +622,100 @@ export const ModelManagement: React.FC = () => {
             setModelConfigs(prev => new Map(prev).set(moduleId, config));
             setSuccessMessage(`${module.name} 的模型配置已更新`);
             setTimeout(() => setSuccessMessage(null), 3000);
+            alert(`${module.name} 的模型配置已成功保存！`);
             // console.log(`[ModelManagement] 模块 ${module.name} 配置更新成功`);
         } catch (err) {
             console.error(`Failed to update config for ${module?.name}:`, err);
             setError(`保存失败: ${err instanceof Error ? err.message : '未知错误'}`);
+        } finally {
+            setLoading(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(moduleId);
+                return newSet;
+            });
+        }
+    };
+
+    const handlePromptChange = (moduleId: string, prompt: string) => {
+        setEditingPrompts(prev => new Map(prev).set(moduleId, prompt));
+    };
+
+    const toggleModule = (moduleId: string) => {
+        setExpandedModules(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(moduleId)) {
+                newSet.delete(moduleId);
+            } else {
+                newSet.add(moduleId);
+            }
+            return newSet;
+        });
+    };
+
+    const handlePromptSave = async (moduleId: string) => {
+        const module = AI_MODULES.find(m => m.id === moduleId);
+        if (!module) return;
+
+        const user = getCurrentUser();
+        const currentConfig = modelConfigs.get(moduleId);
+        const newPrompt = editingPrompts.get(moduleId) || '';
+
+        setLoading(prev => new Set(prev).add(moduleId));
+        setError(null);
+        setSuccessMessage(null);
+
+        try {
+            const token = await fetchAuthToken();
+
+            const config: ModelConfig = {
+                name: user.name,
+                main_module: module.main_module,
+                sub_module: module.sub_module,
+                model: {
+                    value: currentConfig?.model?.value || ''
+                },
+                model_type: 'single',
+                settings: currentConfig?.settings || {
+                    temperature: 0.7,
+                    max_tokens: 7000,
+                    top_p: 1,
+                    frequency_penalty: 0,
+                    presence_penalty: 0,
+                    logprobs: false,
+                    n: 1,
+                    stream: false
+                },
+                prompt: newPrompt,
+                created_by: user.name,
+                uid: user.uid
+            };
+
+            const response = await fetch(`${API_BASE_URL}/admin/chatgpt/model/upsert`, {
+                method: 'POST',
+                headers: {
+                    'accept': '*/*',
+                    'content-type': 'application/json',
+                    'authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify(config),
+            });
+
+            if (!response.ok) {
+                throw new Error('保存失败');
+            }
+
+            setModelConfigs(prev => new Map(prev).set(moduleId, config));
+            setEditingPrompts(prev => {
+                const newMap = new Map(prev);
+                newMap.delete(moduleId);
+                return newMap;
+            });
+            setSuccessMessage(`${module.name} 的提示词已更新`);
+            setTimeout(() => setSuccessMessage(null), 3000);
+            alert(`${module.name} 的提示词已成功保存！`);
+        } catch (err) {
+            console.error(`Failed to update prompt for ${module?.name}:`, err);
+            setError(`保存提示词失败: ${err instanceof Error ? err.message : '未知错误'}`);
         } finally {
             setLoading(prev => {
                 const newSet = new Set(prev);
@@ -658,31 +759,57 @@ export const ModelManagement: React.FC = () => {
 
             {/* 模块列表 */}
             {!isInitialLoading && (
-                <div className="space-y-4">
+                <div className="space-y-3">
                     {AI_MODULES.map(module => {
                         const config = modelConfigs.get(module.id);
                         const isLoading = loading.has(module.id);
+                        const isExpanded = expandedModules.has(module.id);
                         // 尝试多种方式获取模型值
                         const currentModel = config?.model?.value || config?.model_name || '';
+                        const currentPrompt = config?.prompt || module.defaultPrompt;
+                        const editingPrompt = editingPrompts.get(module.id);
+                        const isEditingPrompt = editingPrompt !== undefined;
+                        const displayPrompt = isEditingPrompt ? editingPrompt : currentPrompt;
 
                         return (
                             <div
                                 key={module.id}
-                                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-5 hover:shadow-md transition-shadow"
+                                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden transition-shadow hover:shadow-md"
                             >
-                                <div className="flex items-start gap-4">
-                                    <div className="flex-shrink-0 mt-1">
+                                {/* 手风琴头部 */}
+                                <button
+                                    onClick={() => toggleModule(module.id)}
+                                    className="w-full flex items-center gap-4 p-5 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+                                >
+                                    <div className="flex-shrink-0">
                                         <BrainIcon className="w-6 h-6 text-sky-600 dark:text-sky-400" />
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <h4 className="text-base font-medium text-slate-900 dark:text-white mb-1">
                                             {module.name}
                                         </h4>
-                                        <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                                        <p className="text-sm text-slate-600 dark:text-slate-400">
                                             {module.description}
                                         </p>
-                                        <div className="flex items-center gap-3">
-                                            <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                                        {currentModel && (
+                                            <p className="text-xs text-slate-500 dark:text-slate-500 mt-1">
+                                                当前模型: {currentModel}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div className="flex-shrink-0">
+                                        <ChevronDownIcon 
+                                            className={`w-5 h-5 text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                        />
+                                    </div>
+                                </button>
+
+                                {/* 手风琴内容 */}
+                                {isExpanded && (
+                                    <div className="px-5 pb-5 pt-2 border-t border-slate-200 dark:border-slate-700">
+                                        {/* 模型选择 */}
+                                        <div className="flex items-center gap-3 mb-4">
+                                            <label className="text-sm font-medium text-slate-700 dark:text-slate-300 w-16">
                                                 模型:
                                             </label>
                                             <ModelSelector
@@ -690,7 +817,65 @@ export const ModelManagement: React.FC = () => {
                                                 onChange={(modelValue) => handleModelChange(module.id, modelValue)}
                                                 disabled={isLoading}
                                             />
-                                            {isLoading && (
+                                            {isLoading && !isEditingPrompt && (
+                                                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                                                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-slate-300 border-t-sky-600"></div>
+                                                    保存中...
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* 提示词编辑区域 */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                                                    提示词:
+                                                </label>
+                                                {isEditingPrompt && (
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            onClick={() => handlePromptSave(module.id)}
+                                                            disabled={isLoading}
+                                                            className="px-3 py-1 text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 disabled:bg-slate-400 rounded-md transition-colors"
+                                                        >
+                                                            保存
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setEditingPrompts(prev => {
+                                                                const newMap = new Map(prev);
+                                                                newMap.delete(module.id);
+                                                                return newMap;
+                                                            })}
+                                                            disabled={isLoading}
+                                                            className="px-3 py-1 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+                                                        >
+                                                            取消
+                                                        </button>
+                                                        <button
+                                                            onClick={() => {
+                                                                setEditingPrompts(prev => new Map(prev).set(module.id, module.defaultPrompt));
+                                                            }}
+                                                            disabled={isLoading}
+                                                            className="px-3 py-1 text-xs font-medium text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+                                                        >
+                                                            恢复默认
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <textarea
+                                                value={displayPrompt}
+                                                onChange={(e) => handlePromptChange(module.id, e.target.value)}
+                                                onFocus={() => {
+                                                    if (!isEditingPrompt) {
+                                                        setEditingPrompts(prev => new Map(prev).set(module.id, currentPrompt));
+                                                    }
+                                                }}
+                                                placeholder={module.defaultPrompt}
+                                                disabled={isLoading}
+                                                className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50 disabled:cursor-not-allowed resize-y min-h-[120px]"
+                                            />
+                                            {isLoading && isEditingPrompt && (
                                                 <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                                                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-slate-300 border-t-sky-600"></div>
                                                     保存中...
@@ -698,7 +883,7 @@ export const ModelManagement: React.FC = () => {
                                             )}
                                         </div>
                                     </div>
-                                </div>
+                                )}
                             </div>
                         );
                     })}

@@ -1,5 +1,5 @@
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { DingTalkUser, EmployeeStats } from '../../../database/schema.ts';
 import { Avatar } from './AttendanceShared.tsx';
 import { AlertTriangleIcon, CheckCircleIcon } from '../../Icons.tsx';
@@ -33,71 +33,134 @@ const getOvertimeCellClass = (value: number | undefined, color: string) => {
 };
 
 export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ employees, onRowClick, companyName, lateExemptionEnabled = true, fullAttendanceEnabled = true, performancePenaltyEnabled = true }) => {
+    // 🔥 新增：视图模式状态（全部数据 / 仅异常数据 / 仅全勤数据）
+    const [viewMode, setViewMode] = useState<'all' | 'abnormal' | 'fullAttendance'>('all');
+    
     // 🔥 修复：统一使用累计迟到分钟数（lateMinutes），与考勤日历保持一致
     // 不再根据豁免开关切换显示值，始终显示累计迟到
     const getLateMinutesValue = (stats: EmployeeStats) => {
         return stats.lateMinutes || 0;
     };
     
-    // 优化排序逻辑：当查看全体员工时应用特殊排序
-    const sortedEmployees = useMemo(() => {
-        if (companyName === '全体员工' || companyName === '全部') {
-            return [...employees].sort((a, b) => {
-                // 1. 纪律危险人员（有绩效扣款的）排在最前面
-                const aHasRisk = (a.stats.performancePenalty || 0) > 0;
-                const bHasRisk = (b.stats.performancePenalty || 0) > 0;
-                
-                if (aHasRisk && !bHasRisk) return -1;
-                if (!aHasRisk && bHasRisk) return 1;
-                
-                // 2. 如果都是纪律风险人员，按迟到分钟数倒序
-                if (aHasRisk && bHasRisk) {
-                    return getLateMinutesValue(b.stats) - getLateMinutesValue(a.stats);
-                }
-                
-                // 3. 对于非风险人员，区分无考勤风险（全勤候选）、全勤、其他
-                if (!aHasRisk && !bHasRisk) {
-                    const aIsFullAttendance = a.stats.isFullAttendance;
-                    const bIsFullAttendance = b.stats.isFullAttendance;
-                    
-                    // 无考勤风险（全勤候选）：没有迟到、缺卡、请假等问题，但可能因为最后工作日等原因未达到全勤
-                    const aIsCandidate = !aIsFullAttendance && 
-                        getLateMinutesValue(a.stats) === 0 && 
-                        (a.stats.missing || 0) === 0 && 
-                        (a.stats.absenteeism || 0) === 0 &&
-                        (a.stats.annual || 0) === 0 &&
-                        (a.stats.sick || 0) === 0 &&
-                        (a.stats.personal || 0) === 0;
-                    
-                    const bIsCandidate = !bIsFullAttendance && 
-                        getLateMinutesValue(b.stats) === 0 && 
-                        (b.stats.missing || 0) === 0 && 
-                        (b.stats.absenteeism || 0) === 0 &&
-                        (b.stats.annual || 0) === 0 &&
-                        (b.stats.sick || 0) === 0 &&
-                        (b.stats.personal || 0) === 0;
-                    
-                    // 排序优先级：无考勤风险（全勤候选） > 全勤 > 其他
-                    if (aIsCandidate && !bIsCandidate && !bIsFullAttendance) return -1;
-                    if (!aIsCandidate && bIsCandidate && !aIsFullAttendance) return 1;
-                    
-                    if (aIsFullAttendance && !bIsFullAttendance && !bIsCandidate) return -1;
-                    if (!aIsFullAttendance && bIsFullAttendance && !aIsCandidate) return 1;
-                    
-                    // 同级别内按迟到分钟数倒序
-                    return getLateMinutesValue(b.stats) - getLateMinutesValue(a.stats);
-                }
-                
-                // 4. 其他情况按迟到分钟数倒序
-                return getLateMinutesValue(b.stats) - getLateMinutesValue(a.stats);
+    // 🔥 新增：过滤和排序逻辑
+    const filteredAndSortedEmployees = useMemo(() => {
+        // 第一步：根据视图模式过滤
+        let filtered = [...employees];
+        
+        if (viewMode === 'abnormal') {
+            // 只显示异常数据：有旷工、有迟到、有缺卡的员工
+            filtered = filtered.filter(({ stats }) => {
+                const hasAbsenteeism = (stats.absenteeism || 0) > 0;
+                const hasLate = getLateMinutesValue(stats) > 0;
+                const hasMissing = (stats.missing || 0) > 0;
+                return hasAbsenteeism || hasLate || hasMissing;
             });
+        } else if (viewMode === 'fullAttendance') {
+            // 只显示全勤数据
+            filtered = filtered.filter(({ stats }) => stats.isFullAttendance);
         }
         
-        // 默认排序：保持原有顺序
-        return employees;
-    }, [employees, companyName, lateExemptionEnabled]);
+        // 🔥 第二步：排序 - 旷工次数 → 豁免后迟到 → 累计迟到 → 缺卡次数 → 全勤
+        return filtered.sort((a, b) => {
+            const aAbsenteeism = a.stats.absenteeism || 0;
+            const bAbsenteeism = b.stats.absenteeism || 0;
+            const aExemptedLate = a.stats.exemptedLateMinutes || 0;
+            const bExemptedLate = b.stats.exemptedLateMinutes || 0;
+            const aLateMinutes = a.stats.lateMinutes || 0;
+            const bLateMinutes = b.stats.lateMinutes || 0;
+            const aMissing = a.stats.missing || 0;
+            const bMissing = b.stats.missing || 0;
+            const aIsFullAttendance = a.stats.isFullAttendance;
+            const bIsFullAttendance = b.stats.isFullAttendance;
+            
+            // 1. 旷工次数从高到低
+            if (aAbsenteeism !== bAbsenteeism) {
+                return bAbsenteeism - aAbsenteeism;
+            }
+            
+            // 2. 豁免后迟到从高到低
+            if (aExemptedLate !== bExemptedLate) {
+                return bExemptedLate - aExemptedLate;
+            }
+            
+            // 3. 累计迟到从高到低
+            if (aLateMinutes !== bLateMinutes) {
+                return bLateMinutes - aLateMinutes;
+            }
+            
+            // 4. 缺卡次数从高到低
+            if (aMissing !== bMissing) {
+                return bMissing - aMissing;
+            }
+            
+            // 5. 全勤排在最后
+            if (aIsFullAttendance && !bIsFullAttendance) return 1;
+            if (!aIsFullAttendance && bIsFullAttendance) return -1;
+            
+            // 6. 其他情况保持原顺序
+            return 0;
+        });
+    }, [employees, viewMode, lateExemptionEnabled]);
+    
+    // 统计数据
+    const stats = useMemo(() => {
+        const total = employees.length;
+        const abnormal = employees.filter(({ stats }) => {
+            const hasAbsenteeism = (stats.absenteeism || 0) > 0;
+            const hasLate = getLateMinutesValue(stats) > 0;
+            const hasMissing = (stats.missing || 0) > 0;
+            return hasAbsenteeism || hasLate || hasMissing;
+        }).length;
+        const fullAttendance = employees.filter(({ stats }) => stats.isFullAttendance).length;
+        
+        return { total, abnormal, fullAttendance };
+    }, [employees, lateExemptionEnabled]);
     return (
         <div className="h-full overflow-hidden flex flex-col border-t-2 border-sky-500 rounded-lg shadow-sm">
+            {/* 🔥 新增：切换按钮 */}
+            <div className="flex-shrink-0 bg-white dark:bg-slate-900 border-x border-slate-200 dark:border-slate-700 px-4 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        显示 {filteredAndSortedEmployees.length} / {stats.total} 人
+                    </span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                        异常 {stats.abnormal} 人 · 全勤 {stats.fullAttendance} 人
+                    </span>
+                </div>
+                <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-1">
+                    <button
+                        onClick={() => setViewMode('all')}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                            viewMode === 'all'
+                                ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                    >
+                        全部数据
+                    </button>
+                    <button
+                        onClick={() => setViewMode('abnormal')}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                            viewMode === 'abnormal'
+                                ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                    >
+                        仅异常数据
+                    </button>
+                    <button
+                        onClick={() => setViewMode('fullAttendance')}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                            viewMode === 'fullAttendance'
+                                ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                    >
+                        仅全勤数据
+                    </button>
+                </div>
+            </div>
+            
             <div className="flex-1 overflow-auto bg-white dark:bg-slate-900 border-x border-b border-slate-200 dark:border-slate-700 rounded-b-lg">
                 <table className="w-full text-sm text-left border-separate border-spacing-0 min-w-[1400px] text-slate-700 dark:text-slate-300">
                     {/* 表头：更深的背景色，Z-index 确保粘性头浮于内容之上 */}
@@ -105,15 +168,15 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                         <tr>
                             {/* 基础信息 (Sticky Col 1) */}
                             <th
-                                style={{ minWidth: 100, width: 180, left: 0, zIndex: 30 }}
-                                className="sticky top-0 px-4 py-3 whitespace-nowrap bg-slate-50 dark:bg-slate-800 border-b border-r border-slate-300 dark:border-slate-600 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)] dark:shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)]"
+                                style={{ minWidth: 200, width: 200, left: 0, zIndex: 30, backgroundColor: 'rgb(248 250 252)' }}
+                                className="sticky top-0 px-4 py-3 whitespace-nowrap dark:bg-slate-800 border-b border-r border-slate-300 dark:border-slate-600 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)] dark:shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)]"
                             >
                                 姓名
                             </th>
                             {fullAttendanceEnabled && (
                                 <th
-                                    style={{ minWidth: 80, width: 80, left: 180, zIndex: 30 }} // left offset = 180 (prev col width)
-                                    className="sticky top-0 px-3 py-3 whitespace-nowrap text-center bg-slate-50 dark:bg-slate-800 border-b border-r border-slate-300 dark:border-slate-600 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)] dark:shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)]"
+                                    style={{ minWidth: 80, width: 80, left: 200, zIndex: 30, backgroundColor: 'rgb(248 250 252)' }} // left offset = 200 (prev col width)
+                                    className="sticky top-0 px-3 py-3 whitespace-nowrap text-center dark:bg-slate-800 border-b border-r border-slate-300 dark:border-slate-600 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)] dark:shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)]"
                                 >
                                     是否全勤
                                 </th>
@@ -167,7 +230,7 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                     </thead>
 
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                        {sortedEmployees.map(({ user, stats }) => {
+                        {filteredAndSortedEmployees.map(({ user, stats }) => {
                             // 使用纯色背景以确保 sticky 列不透明
                             const stickyBgClass = 'bg-white dark:bg-slate-900';
                             
@@ -185,7 +248,7 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                                 >
                                     {/* 名字 (Sticky Col 1) - Opaque Background */}
                                     <td
-                                        style={{ minWidth: 100, width: 180, left: 0, zIndex: 10 }}
+                                        style={{ minWidth: 120, width: 200, left: 0, zIndex: 10 }}
                                         className={`sticky px-4 py-3 font-medium text-slate-900 dark:text-white whitespace-nowrap flex items-center gap-2 border-b border-r border-slate-200 dark:border-slate-700 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)] dark:shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)] ${stickyBgClass} group-hover:bg-slate-50 dark:group-hover:bg-slate-800`}
                                     >
                                         <div className="relative">
@@ -202,7 +265,7 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                                     {/* 全勤 (Sticky Col 2) - Opaque Background - 根据fullAttendanceEnabled条件渲染 */}
                                     {fullAttendanceEnabled && (
                                         <td
-                                            style={{ minWidth: 80, width: 80, left: 180, zIndex: 10 }}
+                                            style={{ minWidth: 80, width: 80, left: 200, zIndex: 10 }}
                                             className={`sticky px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.1)] dark:shadow-[4px_0_12px_-4px_rgba(0,0,0,0.5)] ${stickyBgClass} group-hover:bg-slate-50 dark:group-hover:bg-slate-800`}
                                         >
                                             {stats.isFullAttendance ? (
@@ -220,12 +283,16 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                                     {performancePenaltyEnabled && (
                                         <td className={`px-3 py-3 text-center whitespace-nowrap font-extrabold border-b border-r border-slate-200 dark:border-slate-700
                                             ${fullAttendanceEnabled && stats.isFullAttendance
-                                                ? 'text-green-600'
+                                                ? 'text-green-600 dark:text-green-400'
                                                 : (stats.performancePenalty || 0) > 0
-                                                    ? 'text-red-600'
-                                                    : 'text-slate-400'
+                                                    ? 'text-red-600 dark:text-red-400'
+                                                    : 'text-slate-600 dark:text-slate-400'
                                             }`}>
-                                            {fullAttendanceEnabled && stats.isFullAttendance ? `+${(stats as any).fullAttendanceBonus || 0}` : stats.performancePenalty ? `- ${stats.performancePenalty}` : '-'}
+                                            {fullAttendanceEnabled && stats.isFullAttendance 
+                                                ? `+${(stats as any).fullAttendanceBonus || 0}` 
+                                                : (stats.performancePenalty || 0) > 0 
+                                                    ? `- ${stats.performancePenalty}` 
+                                                    : '0'}
                                         </td>
                                     )}
 
@@ -296,10 +363,34 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                             );
                         })}
 
-                        {sortedEmployees.length === 0 && (
+                        {filteredAndSortedEmployees.length === 0 && (
                             <tr>
-                                <td colSpan={lateExemptionEnabled ? 30 : 29} className="px-4 py-8 text-center text-slate-500 dark:text-slate-400">
-                                    暂无员工数据
+                                <td colSpan={lateExemptionEnabled ? 30 : 29} className="border-b border-slate-200 dark:border-slate-700">
+                                    <div className="flex flex-col items-center justify-center text-center py-16">
+                                        {viewMode === 'abnormal' ? (
+                                            <>
+                                                <CheckCircleIcon className="w-16 h-16 text-green-400 dark:text-green-500 mb-4" />
+                                                <p className="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-2">太棒了！没有异常数据</p>
+                                                <p className="text-sm text-slate-500 dark:text-slate-400">所有员工考勤正常，继续保持！</p>
+                                            </>
+                                        ) : viewMode === 'fullAttendance' ? (
+                                            <>
+                                                <AlertTriangleIcon className="w-16 h-16 text-amber-400 dark:text-amber-500 mb-4" />
+                                                <p className="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-2">暂无全勤员工</p>
+                                                <p className="text-sm text-slate-500 dark:text-slate-400">本月还没有达到全勤标准的员工</p>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <div className="w-16 h-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-4">
+                                                    <svg className="w-8 h-8 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                                                    </svg>
+                                                </div>
+                                                <p className="text-lg font-semibold text-slate-700 dark:text-slate-300 mb-2">暂无员工数据</p>
+                                                <p className="text-sm text-slate-500 dark:text-slate-400">请检查筛选条件或数据加载状态</p>
+                                            </>
+                                        )}
+                                    </div>
                                 </td>
                             </tr>
                         )}

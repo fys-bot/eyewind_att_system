@@ -105,8 +105,10 @@ export const RoleManagement: React.FC = () => {
         try {
             if (editingRole) {
                 await roleApi.updateRole(editingRole.role_id, formData);
+                alert('角色配置已成功更新！');
             } else {
                 await roleApi.createRole(formData);
+                alert('角色已成功创建！');
             }
             await loadRoles();
             setIsModalOpen(false);

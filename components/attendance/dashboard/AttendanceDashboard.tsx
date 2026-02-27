@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   UsersIcon, ClockIcon, AlertTriangleIcon, TrendingUpIcon, ActivityIcon, UserMinusIcon, XCircleIcon, SparklesIcon,
-  DownloadIcon, CalendarIcon, Loader2Icon, RefreshCwIcon, XIcon, ChevronRightIcon, SendIcon, SlidersHorizontalIcon
+  DownloadIcon, CalendarIcon, Loader2Icon, RefreshCwIcon, XIcon, ChevronRightIcon, SendIcon, SlidersHorizontalIcon,
+  CheckCircleIcon
 } from '../../Icons.tsx';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import type { DingTalkUser, EmployeeStats, CompanyCounts } from '../../../database/schema.ts';
@@ -335,6 +336,7 @@ const TopStatsList: React.FC<{
           case 'personalHours': return e.stats.personalHours || 0;
           case 'missing': return e.stats.missing || 0;
           case 'absenteeism': return e.stats.absenteeism || 0;
+          case 'fullAttendance': return e.stats.isFullAttendance ? 1 : 0;
           default: return 0;
       }
   };
@@ -352,7 +354,8 @@ const TopStatsList: React.FC<{
       'sickHours': { title: '病假榜 (健康)', unit: '小时' },
       'personalHours': { title: '事假榜', unit: '小时' },
       'missing': { title: '缺卡榜', unit: '次' },
-      'absenteeism': { title: '旷工榜', unit: '次' }
+      'absenteeism': { title: '旷工榜', unit: '次' },
+      'fullAttendance': { title: '全勤榜', unit: '人' }
   };
 
   const { title, unit } = configMap[type] || { title: '排行榜', unit: '' };
@@ -414,7 +417,7 @@ export const CompanyDashboardView: React.FC<{
   processDataMap: Record<string, any>;
   onViewEmployeeList: (companyName: string) => void;
   onViewCalendar: (companyName: string) => void;
-  onDownloadReports: (companyName: string) => void;
+  onDownloadReports: (companyName: string, isPreview?: boolean) => void;
   onCustomDownload?: (companyName: string) => void; // 自定义下载回调
   onPushReport?: () => void; // 推送报告回调
   holidays: any;
@@ -434,6 +437,9 @@ export const CompanyDashboardView: React.FC<{
   
   // State for Ranking Modal
   const [rankingModal, setRankingModal] = useState<{ isOpen: boolean; title: string; unit: string; data: any[]; colorClass: string } | null>(null);
+  
+  // State for Ranking Display Mode (迟到数据 or 全勤数据)
+  const [rankingMode, setRankingMode] = useState<'late' | 'fullAttendance'>('late');
 
   // AI Analysis State
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
@@ -637,41 +643,69 @@ ${riskEmployeesList}
       <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
         <div className="flex justify-between items-center mb-6">
           <div><h3 className="text-2xl font-bold text-slate-900 dark:text-white truncate" title={companyName}>{companyName}</h3></div>
-          <div className="flex gap-2">
-              <button 
-                onClick={() => onDownloadReports(activeCompany)} 
-                className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm"
-              >
-                  <DownloadIcon className="w-3.5 h-3.5" />下载报表
-              </button>
-              {onCustomDownload && (
-                <button 
-                  onClick={() => onCustomDownload(activeCompany)} 
-                  className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm"
-                >
-                    <SlidersHorizontalIcon className="w-3.5 h-3.5" />自定义下载
-                </button>
-              )}
-              {onPushReport && (
-                <button 
-                  onClick={onPushReport} 
-                  className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 text-white text-xs font-semibold rounded hover:bg-emerald-500 transition-all shadow-sm"
-                >
-                    <SendIcon className="w-3.5 h-3.5" />推送
-                </button>
-              )}
-              <button 
-                onClick={() => onViewEmployeeList(activeCompany === '全部' ? '全部' : activeCompany)} 
-                className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 dark:bg-slate-700 text-xs font-semibold rounded hover:bg-slate-200 dark:hover:bg-slate-600 transition-all shadow-sm"
-              >
-                  <UsersIcon className="w-3.5 h-3.5" />查看员工列表
-              </button>
-              <button 
-                onClick={() => onViewCalendar(activeCompany === '全部' ? '全部' : activeCompany)} 
-                className="flex items-center gap-2 px-3 py-1.5 bg-sky-600 text-white text-xs font-semibold rounded hover:bg-sky-500 transition-all shadow-sm"
-              >
-                  <CalendarIcon className="w-3.5 h-3.5" />查看考勤日历
-              </button>
+          <div className="flex flex-wrap items-center gap-2">
+              {/* 主要操作按钮组 */}
+              <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => onViewEmployeeList(activeCompany === '全部' ? '全部' : activeCompany)} 
+                    className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm"
+                  >
+                      <UsersIcon className="w-4 h-4" />
+                      <span>查看员工列表</span>
+                  </button>
+                  <button 
+                    onClick={() => onViewCalendar(activeCompany === '全部' ? '全部' : activeCompany)} 
+                    className="flex items-center gap-2 px-4 py-2 bg-sky-600 text-white text-sm font-medium rounded-lg hover:bg-sky-500 transition-all shadow-sm"
+                  >
+                      <CalendarIcon className="w-4 h-4" />
+                      <span>查看考勤日历</span>
+                  </button>
+              </div>
+              
+              {/* 分隔线 */}
+              <div className="h-8 w-px bg-slate-200 dark:bg-slate-700"></div>
+              
+              {/* 次要操作按钮组 */}
+              <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                      <button 
+                        onClick={() => onDownloadReports(activeCompany, true)} 
+                        className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-l-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm"
+                        title="预览报表"
+                      >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                          </svg>
+                      </button>
+                      <button 
+                        onClick={() => onDownloadReports(activeCompany, false)} 
+                        className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-r-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm border-l-0"
+                        title="下载报表"
+                      >
+                          <DownloadIcon className="w-4 h-4" />
+                          <span>下载报表</span>
+                      </button>
+                  </div>
+                  {onCustomDownload && (
+                    <button 
+                      onClick={() => onCustomDownload(activeCompany)} 
+                      className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm"
+                    >
+                        <SlidersHorizontalIcon className="w-4 h-4" />
+                        <span>自定义下载</span>
+                    </button>
+                  )}
+                  {onPushReport && (
+                    <button 
+                      onClick={onPushReport} 
+                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-500 transition-all shadow-sm"
+                    >
+                        <SendIcon className="w-4 h-4" />
+                        <span>推送</span>
+                    </button>
+                  )}
+              </div>
           </div>
         </div>
 
@@ -703,19 +737,138 @@ ${riskEmployeesList}
             <AccordionSection title="数据分析与洞察" icon={<TrendingUpIcon className="w-5 h-5 text-indigo-500 " />} isSticky={false}>
             {/* Reduced vertical padding here */}
             <div className="my-2 ml-1 mr-1">
+                {/* Ranking Mode Toggle */}
+                <div className="flex justify-end mb-2">
+                    <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-1">
+                        <button
+                            onClick={() => setRankingMode('late')}
+                            className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                                rankingMode === 'late'
+                                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                        >
+                            迟到数据
+                        </button>
+                        <button
+                            onClick={() => setRankingMode('fullAttendance')}
+                            className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                                rankingMode === 'fullAttendance'
+                                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                        >
+                            全勤数据
+                        </button>
+                    </div>
+                </div>
+                
                 {/* Ranking Lists Row */}
                 <div className="flex flex-wrap gap-2 bg-white dark:bg-slate-900/40 p-2 rounded-lg border border-slate-100 dark:border-slate-700/50">
-                    <TopStatsList employees={employees} type="exemptedLateMinutes" icon={<ClockIcon className="w-3 h-3" />} color="text-orange-600 dark:text-orange-400" onShowFull={handleShowRanking} lateExemptionEnabled={lateExemptionEnabled} />
-                    <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
-                    <TopStatsList employees={employees} type="missing" icon={<XCircleIcon className="w-3 h-3" />} color="text-red-600 dark:text-red-400" onShowFull={handleShowRanking} />
-                    <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
-                    <TopStatsList employees={employees} type="absenteeism" icon={<AlertTriangleIcon className="w-3 h-3" />} color="text-red-800 dark:text-red-600" onShowFull={handleShowRanking} />
-                    <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
-                    <TopStatsList employees={employees} type="overtimeTotalMinutes" icon={<SparklesIcon className="w-3 h-3" />} color="text-blue-600 dark:text-blue-400" onShowFull={handleShowRanking} />
-                    <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
-                    <TopStatsList employees={employees} type="sickHours" icon={<ActivityIcon className="w-3 h-3" />} color="text-rose-600 dark:text-rose-400" onShowFull={handleShowRanking} />
-                    <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
-                    <TopStatsList employees={employees} type="personalHours" icon={<UserMinusIcon className="w-3 h-3" />} color="text-yellow-600 dark:text-yellow-400" onShowFull={handleShowRanking} />
+                    {rankingMode === 'late' ? (
+                        <>
+                            {/* 🔥 先渲染有数据的卡片，再渲染没有数据的卡片 */}
+                            {[
+                                { type: 'exemptedLateMinutes', icon: <ClockIcon className="w-3 h-3" />, color: 'text-orange-600 dark:text-orange-400' },
+                                { type: 'missing', icon: <XCircleIcon className="w-3 h-3" />, color: 'text-red-600 dark:text-red-400' },
+                                { type: 'absenteeism', icon: <AlertTriangleIcon className="w-3 h-3" />, color: 'text-red-800 dark:text-red-600' },
+                                { type: 'overtimeTotalMinutes', icon: <SparklesIcon className="w-3 h-3" />, color: 'text-blue-600 dark:text-blue-400' },
+                                { type: 'sickHours', icon: <ActivityIcon className="w-3 h-3" />, color: 'text-rose-600 dark:text-rose-400' },
+                                { type: 'personalHours', icon: <UserMinusIcon className="w-3 h-3" />, color: 'text-yellow-600 dark:text-yellow-400' }
+                            ]
+                            .sort((a, b) => {
+                                // 计算每个类型是否有数据
+                                const aHasData = employees.some(e => {
+                                    const value = a.type === 'exemptedLateMinutes' 
+                                        ? (lateExemptionEnabled ? (e.stats.exemptedLateMinutes || 0) : (e.stats.lateMinutes || 0))
+                                        : a.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
+                                        : a.type === 'sickHours' ? (e.stats.sickHours || 0)
+                                        : a.type === 'personalHours' ? (e.stats.personalHours || 0)
+                                        : a.type === 'missing' ? (e.stats.missing || 0)
+                                        : a.type === 'absenteeism' ? (e.stats.absenteeism || 0)
+                                        : 0;
+                                    return value > 0;
+                                });
+                                const bHasData = employees.some(e => {
+                                    const value = b.type === 'exemptedLateMinutes' 
+                                        ? (lateExemptionEnabled ? (e.stats.exemptedLateMinutes || 0) : (e.stats.lateMinutes || 0))
+                                        : b.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
+                                        : b.type === 'sickHours' ? (e.stats.sickHours || 0)
+                                        : b.type === 'personalHours' ? (e.stats.personalHours || 0)
+                                        : b.type === 'missing' ? (e.stats.missing || 0)
+                                        : b.type === 'absenteeism' ? (e.stats.absenteeism || 0)
+                                        : 0;
+                                    return value > 0;
+                                });
+                                // 有数据的排在前面
+                                if (aHasData && !bHasData) return -1;
+                                if (!aHasData && bHasData) return 1;
+                                return 0;
+                            })
+                            .map((item, index, array) => (
+                                <React.Fragment key={item.type}>
+                                    <TopStatsList 
+                                        employees={employees} 
+                                        type={item.type} 
+                                        icon={item.icon} 
+                                        color={item.color} 
+                                        onShowFull={handleShowRanking} 
+                                        lateExemptionEnabled={lateExemptionEnabled} 
+                                    />
+                                    {index < array.length - 1 && (
+                                        <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
+                                    )}
+                                </React.Fragment>
+                            ))}
+                        </>
+                    ) : (
+                        <>
+                            {/* 🔥 全勤模式：先渲染有数据的卡片，再渲染没有数据的卡片 */}
+                            {[
+                                { type: 'fullAttendance', icon: <CheckCircleIcon className="w-3 h-3" />, color: 'text-green-600 dark:text-green-400', employees: employees.filter(e => e.stats.isFullAttendance) },
+                                { type: 'overtimeTotalMinutes', icon: <SparklesIcon className="w-3 h-3" />, color: 'text-blue-600 dark:text-blue-400', employees: employees },
+                                { type: 'sickHours', icon: <ActivityIcon className="w-3 h-3" />, color: 'text-rose-600 dark:text-rose-400', employees: employees },
+                                { type: 'personalHours', icon: <UserMinusIcon className="w-3 h-3" />, color: 'text-yellow-600 dark:text-yellow-400', employees: employees }
+                            ]
+                            .sort((a, b) => {
+                                // 计算每个类型是否有数据
+                                const aHasData = a.employees.some(e => {
+                                    const value = a.type === 'fullAttendance' ? (e.stats.isFullAttendance ? 1 : 0)
+                                        : a.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
+                                        : a.type === 'sickHours' ? (e.stats.sickHours || 0)
+                                        : a.type === 'personalHours' ? (e.stats.personalHours || 0)
+                                        : 0;
+                                    return value > 0;
+                                });
+                                const bHasData = b.employees.some(e => {
+                                    const value = b.type === 'fullAttendance' ? (e.stats.isFullAttendance ? 1 : 0)
+                                        : b.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
+                                        : b.type === 'sickHours' ? (e.stats.sickHours || 0)
+                                        : b.type === 'personalHours' ? (e.stats.personalHours || 0)
+                                        : 0;
+                                    return value > 0;
+                                });
+                                // 有数据的排在前面
+                                if (aHasData && !bHasData) return -1;
+                                if (!aHasData && bHasData) return 1;
+                                return 0;
+                            })
+                            .map((item, index, array) => (
+                                <React.Fragment key={item.type}>
+                                    <TopStatsList 
+                                        employees={item.employees} 
+                                        type={item.type} 
+                                        icon={item.icon} 
+                                        color={item.color} 
+                                        onShowFull={handleShowRanking} 
+                                    />
+                                    {index < array.length - 1 && (
+                                        <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
+                                    )}
+                                </React.Fragment>
+                            ))}
+                        </>
+                    )}
                 </div>
                 
                 <div className="flex gap-4 mt-4 h-48 w-full">
@@ -723,17 +876,19 @@ ${riskEmployeesList}
                     <div className="flex-1 bg-white dark:bg-slate-900/40 rounded-lg border border-slate-100 dark:border-slate-700 p-1 min-w-0">
                         <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 ml-2">本月异常趋势 (迟到/缺卡/请假)</div>
                         <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={companyName === '全部' ? 
-                                // 汇总所有公司的每日趋势数据
-                                Object.keys(dailyTrend).length > 0 ? 
-                                    Array.from({ length: 31 }, (_, i) => {
+                            <AreaChart data={(() => {
+                                if (companyName === '全部') {
+                                    // 汇总所有公司的每日趋势数据 - 始终生成31天
+                                    return Array.from({ length: 31 }, (_, i) => {
                                         const day = i + 1;
-                                        const dayStr = `${month + 1}月${day}日`; // 匹配DailyTrend中的day格式
+                                        const dayStr = `${month + 1}月${day}日`;
+                                        
+                                        // 汇总所有公司这一天的数据
                                         const dayData = Object.values(dailyTrend).reduce((total: any, companyData: any) => {
                                             const dayRecord = (companyData as any[])?.find((d: any) => d.day === dayStr);
                                             if (dayRecord) {
                                                 return {
-                                                    day,
+                                                    day: dayStr,
                                                     late: total.late + (dayRecord.late || 0),
                                                     missing: total.missing + (dayRecord.missing || 0),
                                                     personal: total.personal + (dayRecord.personal || 0),
@@ -742,13 +897,38 @@ ${riskEmployeesList}
                                                     compTime: total.compTime + (dayRecord.compTime || 0)
                                                 };
                                             }
-                                            return { ...total, day };
-                                        }, { day, late: 0, missing: 0, personal: 0, sick: 0, annual: 0, compTime: 0 });
+                                            return total;
+                                        }, { day: dayStr, late: 0, missing: 0, personal: 0, sick: 0, annual: 0, compTime: 0 });
+                                        
                                         return dayData;
-                                    }) // 移除过滤，显示所有天数（包括0值）
-                                : []
-                                : dailyTrend[companyName] || []
-                            }>
+                                    });
+                                } else {
+                                    // 单个公司 - 确保有完整的31天数据
+                                    const companyData = dailyTrend[companyName] || [];
+                                    return Array.from({ length: 31 }, (_, i) => {
+                                        const day = i + 1;
+                                        const dayStr = `${month + 1}月${day}日`;
+                                        
+                                        // 查找这一天的数据
+                                        const dayRecord = companyData.find((d: any) => d.day === dayStr);
+                                        
+                                        if (dayRecord) {
+                                            return dayRecord;
+                                        } else {
+                                            // 没有数据，返回 0 值（在0线上显示）
+                                            return {
+                                                day: dayStr,
+                                                late: 0,
+                                                missing: 0,
+                                                personal: 0,
+                                                sick: 0,
+                                                annual: 0,
+                                                compTime: 0
+                                            };
+                                        }
+                                    });
+                                }
+                            })()}>
                             <defs>
                                 <linearGradient id="colorLate" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#f97316" stopOpacity={0.3} /><stop offset="95%" stopColor="#f97316" stopOpacity={0} /></linearGradient>
                             </defs>

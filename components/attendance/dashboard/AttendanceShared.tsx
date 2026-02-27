@@ -234,7 +234,7 @@ export const ProcessDetailCard: React.FC<{ processInfo: any }> = ({ processInfo 
                     <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-100 dark:border-slate-700/50">
                         <div className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">申请事由</div>
                         <div className="text-base font-medium text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-wrap">
-                            {reason}
+                            {reason.replace(/\\n/g, '\n')}
                         </div>
                     </div>
 
