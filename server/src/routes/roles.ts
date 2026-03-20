@@ -211,8 +211,31 @@ router.delete('/:roleId', async (req, res) => {
 // 获取所有可用权限
 router.get('/permissions', async (req, res) => {
   try {
-    // 返回所有可用权限（更详细的权限分类）
+    // 🔥 按照菜单栏顺序组织权限
     const ALL_PERMISSIONS = {
+      '员工列表': {
+        'employee_list:view': '查看员工列表',
+        'employee_list:detail': '查看员工详情',
+        'employee_list:sync': '同步钉钉花名册',
+        'employee_list:filter': '筛选员工',
+        'employee_list:edit': '编辑员工信息',
+        'employee_list:delete': '删除员工',
+        'employee_list:export': '导出员工列表',
+      },
+      '考勤仪表盘': {
+        'attendance_dashboard:view': '查看仪表盘概览',
+        'attendance_dashboard:statistics': '查看统计数据',
+        'attendance_dashboard:ranking': '查看排名统计',
+        'attendance_dashboard:charts': '查看图表分析',
+        'attendance_dashboard:calendar_view': '查看考勤日历',
+        'attendance_dashboard:calendar_edit': '编辑日历 (补卡/修改状态)',
+        'attendance_dashboard:ai_analysis': '查看AI智能分析',
+        'attendance_dashboard:export': '下载统计报表',
+        'attendance_dashboard:preview': '预览报表',
+        'attendance_dashboard:custom_download': '自定义下载',
+        'attendance_dashboard:push_report': '推送报告',
+        'attendance_dashboard:create_verification': '创建考勤确认',
+      },
       '考勤确认': {
         'attendance_verification:view': '查看确认单列表',
         'attendance_verification:create': '创建/上传考勤表',
@@ -223,51 +246,33 @@ router.get('/permissions', async (req, res) => {
         'attendance_verification:delete': '删除确认单',
         'attendance_verification:export': '导出考勤数据',
       },
-      '考勤仪表盘': {
-        'attendance_dashboard:view': '查看仪表盘概览',
-        'attendance_dashboard:export': '下载统计报表',
-        'attendance_dashboard:calendar_view': '查看考勤日历',
-        'attendance_dashboard:calendar_edit': '编辑日历 (补卡/修改状态)',
-        'attendance_dashboard:ai_analysis': '查看AI智能分析',
-        'attendance_dashboard:statistics': '查看统计数据',
-        'attendance_dashboard:charts': '查看图表分析',
-      },
-      '员工列表': {
-        'employee_list:view': '查看员工列表',
-        'employee_list:sync': '同步钉钉花名册',
-        'employee_list:edit': '编辑员工信息',
-        'employee_list:delete': '删除员工',
-        'employee_list:export': '导出员工列表',
-      },
       '考勤规则': {
         'attendance_rules:view': '查看考勤规则',
         'attendance_rules:edit': '编辑考勤规则',
         'attendance_rules:create': '创建考勤规则',
         'attendance_rules:delete': '删除考勤规则',
+        'attendance_rules:test': '测试规则',
+      },
+      '账号管理': {
+        'admin:users': '用户账号管理',
+        'admin:roles': '角色权限管理',
+      },
+      '参数管理': {
+        'params:view': '查看系统参数',
+        'params:edit': '编辑系统参数',
+      },
+      '模型管理': {
+        'model:view': '查看模型列表',
+        'model:edit': '编辑模型配置',
+        'model:test': '测试模型',
+        'model:delete': '删除模型',
       },
       '日志管理': {
         'logs:view': '查看操作日志',
+        'logs:filter': '筛选日志',
+        'logs:statistics': '查看日志统计',
         'logs:export': '导出日志',
         'logs:delete': '删除日志',
-        'logs:statistics': '查看日志统计',
-      },
-      '系统管理': {
-        'admin:users': '用户账号管理',
-        'admin:roles': '角色权限管理',
-        'admin:settings': '全局参数配置',
-        'admin:backup': '系统备份',
-        'admin:restore': '系统恢复',
-      },
-      '钉钉集成': {
-        'dingtalk:config': '配置钉钉参数',
-        'dingtalk:sync_employees': '同步员工数据',
-        'dingtalk:sync_attendance': '同步考勤数据',
-        'dingtalk:send_notification': '发送钉钉通知',
-      },
-      '数据导入导出': {
-        'data:import': '导入数据',
-        'data:export': '导出数据',
-        'data:batch_operation': '批量操作',
       }
     };
 

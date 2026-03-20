@@ -1,11 +1,15 @@
 import express from 'express';
 import db from '../db';
+import { logApiRequest, logDbQuery, logApiResponse, logError, getDataStructure } from '../utils/logger';
 
 const router = express.Router();
 
 // 获取所有用户
 router.get('/', async (req, res) => {
+  const startTime = Date.now();
   try {
+    logApiRequest('/api/users', 'GET');
+    
     const users = await db('att_sys_users')
       .leftJoin('att_sys_roles', 'att_sys_users.role_id', 'att_sys_roles.role_id')
       .select(
@@ -24,13 +28,18 @@ router.get('/', async (req, res) => {
       )
       .orderBy('att_sys_users.created_at', 'desc');
 
+    const duration = Date.now() - startTime;
+    logDbQuery('getAllUsers', users.length, getDataStructure(users), duration);
+    logApiResponse('/api/users', 200, users.length, duration);
+
     res.json({
       code: 0,
       message: 'success',
       data: users
     });
   } catch (error) {
-    console.error('获取用户列表失败:', error);
+    const duration = Date.now() - startTime;
+    logError('获取用户列表失败', error, { duration });
     res.status(500).json({
       code: 50000,
       message: '获取用户列表失败',
@@ -196,10 +205,14 @@ router.delete('/:userId', async (req, res) => {
 
 // 用户登录
 router.post('/login', async (req, res) => {
+  const startTime = Date.now();
   try {
     const { username, password } = req.body;
 
+    logApiRequest('/api/users/login', 'POST', undefined, undefined, { username, hasPassword: !!password });
+
     if (!username || !password) {
+      logError('缺少登录参数', new Error('Missing params'), { hasUsername: !!username, hasPassword: !!password });
       return res.status(400).json({
         code: 40000,
         message: '用户名和密码为必填项'
@@ -225,6 +238,8 @@ router.post('/login', async (req, res) => {
       .first();
 
     if (!user) {
+      const duration = Date.now() - startTime;
+      logError('用户不存在', new Error('User not found'), { username, duration });
       return res.status(401).json({
         code: 40100,
         message: '用户名或密码错误'
@@ -233,6 +248,8 @@ router.post('/login', async (req, res) => {
 
     // 验证密码 (TODO: 使用 bcrypt 验证)
     if (user.password_hash !== password) {
+      const duration = Date.now() - startTime;
+      logError('密码错误', new Error('Wrong password'), { username, duration });
       return res.status(401).json({
         code: 40100,
         message: '用户名或密码错误'
@@ -241,6 +258,8 @@ router.post('/login', async (req, res) => {
 
     // 检查账号状态
     if (user.status !== 'active') {
+      const duration = Date.now() - startTime;
+      logError('账号已禁用', new Error('Account disabled'), { username, status: user.status, duration });
       return res.status(403).json({
         code: 40300,
         message: '账号已被禁用'
@@ -257,6 +276,10 @@ router.post('/login', async (req, res) => {
       ? JSON.parse(user.permissions) 
       : user.permissions;
 
+    const duration = Date.now() - startTime;
+    logDbQuery('userLogin', 1, `userId=${user.user_id}, role=${user.roleName}`, duration);
+    logApiResponse('/api/users/login', 200, 1, duration);
+
     // 返回用户信息（不包含密码）
     const { password_hash, ...userInfo } = user;
     res.json({
@@ -268,7 +291,8 @@ router.post('/login', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('登录失败:', error);
+    const duration = Date.now() - startTime;
+    logError('登录失败', error, { duration });
     res.status(500).json({
       code: 50000,
       message: '登录失败',

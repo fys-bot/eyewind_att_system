@@ -1,5 +1,6 @@
 
 import React from 'react';
+import ReactDOM from 'react-dom';
 import { XIcon } from './Icons.tsx';
 
 interface ModalProps {
@@ -25,7 +26,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
         '6xl': 'max-w-6xl',
     };
 
-    return (
+    return ReactDOM.createPortal(
         <div 
             className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" 
             onClick={onClose} 
@@ -58,6 +59,7 @@ export const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, 
                     </div>
                 )}
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };

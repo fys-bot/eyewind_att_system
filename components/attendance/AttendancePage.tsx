@@ -3,12 +3,13 @@ import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import type { AttendanceSheet, EmployeeAttendanceRecord, AttendanceSheetStatus, DingTalkUser, User } from '../../database/schema.ts';
 import { db } from '../../database/mockDb.ts';
 import { Loader2Icon, DownloadIcon } from '../Icons.tsx';
-import { fetchAllEmployees } from './verification/api.ts';
+import { fetchAllEmployees, employeeCache } from './verification/api.ts';
 import { CreateAttendanceWizard } from './verification/CreateWizard.tsx';
 import { SheetList } from './verification/SheetList.tsx';
 import { AttendanceDetailView } from './verification/DetailView.tsx';
 import { AttendanceEmptyState } from './EmptyState.tsx';
 import { SmartCache, DashboardCache } from './utils.ts';
+import { AttendanceRuleManager } from './AttendanceRuleEngine.ts';
 
 // 🔥 计算记录完整性得分的辅助函数
 function calculateRecordCompleteness(record: any): number {
@@ -57,7 +58,7 @@ function calculateRecordCompleteness(record: any): number {
 // 4. 在所有状态更新前检查组件是否仍然挂载
 // 5. 简化了 loadData 的依赖项，只包含必要的变量
 export interface AttendancePageProps {
-    preloadedData?: { data: EmployeeAttendanceRecord[]; month: string; mainCompany: string } | null;
+    preloadedData?: { data: EmployeeAttendanceRecord[]; month: string; mainCompany: string; source?: 'dashboard' | 'calendar'; holidays?: Record<string, { holiday: boolean; name?: string }> } | null;
     onBack?: () => void;
     currentCompany: string; // New Prop
     onLoadingChange?: (loading: boolean) => void;
@@ -110,9 +111,8 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                 await SmartCache.remove(cacheKey);
                 await SmartCache.remove('ATTENDANCE_SHEETS_RAW');
                 
-                // 清除员工数据缓存
+                // 清除员工数据缓存（使用正确的缓存实例）
                 const employeeCacheKey = `employees_${currentCompany}`;
-                const employeeCache = (window as any).employeeCache || new Map();
                 employeeCache.delete(employeeCacheKey);
             }
             
@@ -138,24 +138,11 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
 
             // console.log('[AttendancePage] 缓存未命中或强制刷新，从API加载数据');
 
-            // 1. 检查员工数据缓存，如果有缓存就跳过员工数据加载
-            const employeeCacheKey = `employees_${currentCompany}`;
-            const employeeCache = (window as any).employeeCache || new Map();
-            const cached = employeeCache.get(employeeCacheKey);
-            const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
-            
-            let employees;
-            if (cached && (Date.now() - cached.timestamp) < CACHE_DURATION) {
-                // console.log('[AttendancePage] 使用缓存的员工数据，跳过Token和Employee API调用');
-                employees = cached.data;
-                setIsDingTalkDataLoading(false);
-            } else {
-                // console.log('[AttendancePage] 缓存过期或不存在，加载员工数据');
-                setIsDingTalkDataLoading(true);
-                employees = await fetchAllEmployees(currentCompany);
-                setIsDingTalkDataLoading(false);
-            }
-            
+            // 1. 加载员工数据（fetchAllEmployees 内部已经有缓存机制）
+            // console.log('[AttendancePage] 开始加载员工数据');
+            setIsDingTalkDataLoading(true);
+            const employees = await fetchAllEmployees(currentCompany);
+            setIsDingTalkDataLoading(false);
             setDingTalkUsers(employees as DingTalkUser[]);
 
             // 2. 直接加载考勤数据 - 🔥 加上公司主体参数
@@ -583,8 +570,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             SmartCache.remove(`ATTENDANCE_SHEETS_${prevCurrentCompanyRef.current}_${globalMonth || 'current'}`);
             SmartCache.remove(`ATTENDANCE_SHEETS_${currentCompany}_${globalMonth || 'current'}`);
             
-            // 清除员工数据缓存
-            const employeeCache = (window as any).employeeCache || new Map();
+            // 清除员工数据缓存（使用正确的缓存实例）
             employeeCache.delete(`employees_${prevCurrentCompanyRef.current}`);
             employeeCache.delete(`employees_${currentCompany}`);
             
@@ -770,6 +756,16 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
             const month = parseInt(monthStr) - 1;
             const daysInMonth = new Date(parseInt(year), month + 1, 0).getDate();
 
+            // 🔥 获取自定义日期调整（法定补班等）
+            const importCompanyKey = (targetCompanyName === 'hydodo' || targetCompanyName.includes('海多多')) ? 'hydodo' : 'eyewind';
+            const importRuleEngine = AttendanceRuleManager.getEngine(importCompanyKey);
+            const importRuleConfig = (importRuleEngine as any).rules;
+            const importCustomDays = importRuleConfig?.workdaySwapRules?.customDays || [];
+            const importCustomDayMap = new Map<string, { type: string; reason: string }>();
+            importCustomDays.forEach((day: any) => {
+                importCustomDayMap.set(day.date, { type: day.type, reason: day.reason });
+            });
+
             const records: EmployeeAttendanceRecord[] = companyUsers.map(user => {
                 // 🔥 修复：从缓存数据中获取员工统计信息
                 // companyCounts 实际上应该是 companyEmployeeStats 的结构
@@ -818,8 +814,14 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                         continue;
                     }
 
-                    // 正常出勤
-                    dailyData[String(day)] = '√';
+                    // 正常出勤：检查是否为法定补班日
+                    const fullDateKey = `${year}-${monthStr}-${String(day).padStart(2, '0')}`;
+                    const importCustomDay = importCustomDayMap.get(fullDateKey);
+                    if (importCustomDay && importCustomDay.type === 'workday') {
+                        dailyData[String(day)] = importCustomDay.reason || '法定补班';
+                    } else {
+                        dailyData[String(day)] = '√';
+                    }
                 }
 
                 // 生成备注
@@ -850,10 +852,6 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                         }
                     }
 
-                    if (dayAttendance.status === 'incomplete') {
-                        const remarkEntry = `缺卡 ${year}-${monthStr}-${String(day).padStart(2, '0')}`;
-                        if (!remarks.includes(remarkEntry)) remarks.push(remarkEntry);
-                    }
                 }
                 
                 dailyData['备注'] = remarks.length > 0 ? remarks.join('\n') : '-';
@@ -976,6 +974,7 @@ export const AttendancePage: React.FC<AttendancePageProps> = ({ preloadedData, o
                     dingTalkUsers={dingTalkUsers} 
                     isDingTalkDataLoading={isDingTalkDataLoading}
                     preloadedData={preloadedData}
+                    holidays={preloadedData?.holidays || {}}
                 />;
             case 'detail':
                 return selectedSheet ? <AttendanceDetailView mainCompany={currentCompany} sheet={selectedSheet} onBack={() => setView('dashboard')} onUpdateSheet={handleUpdateSheet} dingTalkUsers={dingTalkUsers} isDingTalkDataLoading={isDingTalkDataLoading} onRefresh={handleRefreshSheetDetail} isRefreshing={isRefreshing} trigger={triggerBulkArchive} userPermissions={userPermissions} currentUserInfo={currentUserInfo} /> : <div>加载中...</div>;

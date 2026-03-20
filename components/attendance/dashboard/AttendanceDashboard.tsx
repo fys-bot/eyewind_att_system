@@ -3,12 +3,13 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   UsersIcon, ClockIcon, AlertTriangleIcon, TrendingUpIcon, ActivityIcon, UserMinusIcon, XCircleIcon, SparklesIcon,
   DownloadIcon, CalendarIcon, Loader2Icon, RefreshCwIcon, XIcon, ChevronRightIcon, SendIcon, SlidersHorizontalIcon,
-  CheckCircleIcon
+  CheckCircleIcon, ClipboardListIcon, LightbulbIcon, BarChartIcon
 } from '../../Icons.tsx';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import type { DingTalkUser, EmployeeStats, CompanyCounts } from '../../../database/schema.ts';
 import { AccordionSection, Avatar } from './AttendanceShared.tsx';
 import { AttendanceStatsTable } from './AttendanceStatsTable.tsx';
+import { AttendanceAnalytics } from './AttendanceAnalytics.tsx';
 import { getLateMinutes } from '../utils.ts';
 import { analyzeAttendanceInsights } from '../../../services/aiChatService.ts';
 import { db } from '../../../database/mockDb.ts';
@@ -272,11 +273,13 @@ const RankingModal: React.FC<{
     onClose: () => void;
     title: string;
     unit: string;
-    data: { user: DingTalkUser; value: number }[];
+    data: { user: DingTalkUser; value: number; details?: string }[];
     colorClass: string;
 }> = ({ isOpen, onClose, title, unit, data, colorClass }) => {
+    const showDetails = title.includes('缺卡') || title.includes('迟到');
+    
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={title} size="md">
+        <Modal isOpen={isOpen} onClose={onClose} title={title} size={showDetails ? "lg" : "md"}>
             <div className="max-h-[60vh] overflow-y-auto pr-2">
                 <table className="w-full text-sm text-left">
                     <thead className="text-xs text-slate-500 uppercase bg-slate-50 dark:bg-slate-700 sticky top-0">
@@ -284,6 +287,7 @@ const RankingModal: React.FC<{
                             <th className="px-4 py-2 w-16 text-center">排名</th>
                             <th className="px-4 py-2">姓名</th>
                             <th className="px-4 py-2 text-right">数值 ({unit})</th>
+                            {showDetails && <th className="px-4 py-2">详情</th>}
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
@@ -298,17 +302,26 @@ const RankingModal: React.FC<{
                                         {idx + 1}
                                     </span>
                                 </td>
-                                <td className="px-4 py-2 flex items-center gap-2">
-                                    <Avatar name={item.user.name} avatarUrl={item.user.avatar} size="sm" />
-                                    <span className="font-medium text-slate-700 dark:text-slate-200">{item.user.name}</span>
+                                <td className="px-4 py-2">
+                                    <div className="flex items-center gap-2">
+                                        <Avatar name={item.user.name} avatarUrl={item.user.avatar} size="sm" />
+                                        <span className="font-medium text-slate-700 dark:text-slate-200">{item.user.name}</span>
+                                    </div>
                                 </td>
                                 <td className={`px-4 py-2 text-right font-mono font-bold ${colorClass}`}>
-                                    {item.value} {unit}
+                                    {Number.isInteger(item.value) ? item.value : Math.round(item.value * 100) / 100} {unit}
                                 </td>
+                                {showDetails && (
+                                    <td className="px-4 py-2">
+                                        <div className="text-xs text-slate-600 dark:text-slate-400 max-w-md">
+                                            {item.details || '-'}
+                                        </div>
+                                    </td>
+                                )}
                             </tr>
                         ))}
                         {data.length === 0 && (
-                            <tr><td colSpan={3} className="text-center py-4 text-slate-400">暂无数据</td></tr>
+                            <tr><td colSpan={showDetails ? 4 : 3} className="text-center py-4 text-slate-400">暂无数据</td></tr>
                         )}
                     </tbody>
                 </table>
@@ -393,7 +406,7 @@ const TopStatsList: React.FC<{
               <span className="text-slate-700 dark:text-slate-300 truncate max-w-[50px]">{item.user.name}</span>
             </div>
             <div className="text-right">
-                <span className={`font-mono font-bold ${color.split(' ')[0]}`}>{item.value}</span>
+                <span className={`font-mono font-bold ${color.split(' ')[0]}`}>{Number.isInteger(item.value) ? item.value : Math.round(item.value * 100) / 100}</span>
                 <span className="text-[9px] text-slate-400 scale-90 ml-0.5 inline-block">{unit}</span>
             </div>
           </li>
@@ -420,6 +433,8 @@ export const CompanyDashboardView: React.FC<{
   onDownloadReports: (companyName: string, isPreview?: boolean) => void;
   onCustomDownload?: (companyName: string) => void; // 自定义下载回调
   onPushReport?: () => void; // 推送报告回调
+  onViewSnapshotLogs?: () => void; // 操作日志回调
+  onConfirmAttendance?: (companyName: string) => void; // 🔥 创建考勤确认回调
   holidays: any;
   companyEmployeeStats: any;
   companyAggregate: any;
@@ -430,21 +445,31 @@ export const CompanyDashboardView: React.FC<{
   lateExemptionEnabled?: boolean; // 是否启用豁免功能
   fullAttendanceEnabled?: boolean; // 是否启用全勤功能
   performancePenaltyEnabled?: boolean; // 是否启用绩效考核功能
-}> = ({ companyCounts, month, year, companyEmployeeStats, companyAggregate, dailyTrend, onViewEmployeeList, onViewCalendar, onDownloadReports, onCustomDownload, onPushReport, holidays, attendanceMap, processDataMap, onSelectEmployeeForAnalysis, activeCompany, canViewAiAnalysis = false, lateExemptionEnabled = true, fullAttendanceEnabled = true, performancePenaltyEnabled = true }) => {
+  analyticsSectionOpen?: boolean; // 进阶分析面板是否打开（由父组件控制）
+  onAnalyticsSectionToggle?: (open: boolean) => void; // 进阶分析面板开关回调
+}> = ({ companyCounts, month, year, companyEmployeeStats, companyAggregate, dailyTrend, onViewEmployeeList, onViewCalendar, onDownloadReports, onCustomDownload, onPushReport, onViewSnapshotLogs, onConfirmAttendance, holidays, attendanceMap, processDataMap, onSelectEmployeeForAnalysis, activeCompany, canViewAiAnalysis = false, lateExemptionEnabled = true, fullAttendanceEnabled = true, performancePenaltyEnabled = true, analyticsSectionOpen: externalAnalyticsOpen, onAnalyticsSectionToggle }) => {
 
   const [showRiskModal, setShowRiskModal] = useState(false);
   const [riskEmployees, setRiskEmployees] = useState<{ user: DingTalkUser; stats: EmployeeStats }[]>([]);
   
+  // 联动折叠状态：进阶展开时，数据分析与洞察自动收起
+  const [insightSectionOpen, setInsightSectionOpen] = useState(true);
+  const [_internalAnalyticsOpen, _setInternalAnalyticsOpen] = useState(false);
+  const analyticsSectionOpen = externalAnalyticsOpen ?? _internalAnalyticsOpen;
+  const setAnalyticsSectionOpen = onAnalyticsSectionToggle ?? _setInternalAnalyticsOpen;
+  const [tableSectionOpen, setTableSectionOpen] = useState(true);
+  
   // State for Ranking Modal
   const [rankingModal, setRankingModal] = useState<{ isOpen: boolean; title: string; unit: string; data: any[]; colorClass: string } | null>(null);
   
-  // State for Ranking Display Mode (迟到数据 or 全勤数据)
-  const [rankingMode, setRankingMode] = useState<'late' | 'fullAttendance'>('late');
+  // State for Ranking Display Mode
+  // (removed - unified ranking list)
 
   // AI Analysis State
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAnalysing, setIsAnalysing] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showFullAttendanceModal, setShowFullAttendanceModal] = useState(false);
 
   // AI 月度诊断分析函数
   const runMonthlyAnalysis = async (forceRefresh = false) => {
@@ -598,7 +623,79 @@ ${riskEmployeesList}
       else if (type === 'missing') colorClass = 'text-red-600';
       else if (type === 'absenteeism') colorClass = 'text-red-800';
 
-      setRankingModal({ isOpen: true, title, unit, data, colorClass });
+      // 为缺卡榜和迟到榜添加日期详情
+      let enrichedData = data;
+      if ((type === 'missing' || type === 'exemptedLateMinutes') && attendanceMap) {
+          console.log(`[handleShowRanking] 开始处理${type === 'missing' ? '缺卡' : '迟到'}榜日期详情`, {
+              dataLength: data.length,
+              attendanceMapKeys: Object.keys(attendanceMap).length,
+              year,
+              month,
+              attendanceMapSample: Object.keys(attendanceMap).slice(0, 2).map(uid => ({
+                  userId: uid,
+                  days: Object.keys(attendanceMap[uid])
+              }))
+          });
+          
+          enrichedData = data.map(item => {
+              const userId = item.user.userid;
+              const userAttendance = attendanceMap[userId];
+              const targetDates: string[] = [];
+              
+              console.log(`[handleShowRanking] 处理用户: ${item.user.name} (${userId})`, {
+                  hasUserAttendance: !!userAttendance,
+                  userAttendanceKeys: userAttendance ? Object.keys(userAttendance) : [],
+                  itemValue: item.value
+              });
+              
+              if (userAttendance) {
+                  // 遍历当月所有天数，查找目标日期
+                  const daysInMonth = new Date(year, month + 1, 0).getDate();
+                  for (let d = 1; d <= daysInMonth; d++) {
+                      const dayKey = String(d); // 🔥 修复：attendanceMap 的 key 是字符串
+                      const daily = userAttendance[dayKey];
+                      if (daily) {
+                          if (type === 'missing') {
+                              // 缺卡：status === 'incomplete'
+                              console.log(`[handleShowRanking] ${item.user.name} - ${d}号:`, {
+                                  status: daily.status,
+                                  recordsCount: daily.records?.length || 0,
+                                  onDutyTime: daily.onDutyTime,
+                                  offDutyTime: daily.offDutyTime,
+                                  isIncomplete: daily.status === 'incomplete',
+                                  records: daily.records?.map((r: any) => ({
+                                      checkType: r.checkType,
+                                      timeResult: r.timeResult,
+                                      userCheckTime: r.userCheckTime
+                                  }))
+                              });
+                              
+                              if (daily.status === 'incomplete') {
+                                  targetDates.push(`${month + 1}/${d}`);
+                              }
+                          } else if (type === 'exemptedLateMinutes') {
+                              // 迟到：检查是否有 Late 记录
+                              const hasLate = daily.records?.some((r: any) => 
+                                  r.checkType === 'OnDuty' && r.timeResult === 'Late'
+                              );
+                              if (hasLate) {
+                                  targetDates.push(`${month + 1}/${d}`);
+                              }
+                          }
+                      }
+                  }
+              }
+              
+              console.log(`[handleShowRanking] ${item.user.name} ${type === 'missing' ? '缺卡' : '迟到'}日期:`, targetDates);
+              
+              return {
+                  ...item,
+                  details: targetDates.length > 0 ? targetDates.join('、') : '-'
+              };
+          });
+      }
+
+      setRankingModal({ isOpen: true, title, unit, data: enrichedData, colorClass });
   };
 
   const companyName = activeCompany;
@@ -633,83 +730,173 @@ ${riskEmployeesList}
   
   const attendanceScore = agg.abnormalUserCount > 0 ? (((employees.length - agg.abnormalUserCount) / employees.length) * 100).toFixed(2) : 100;
 
+  // 🔥 计算全勤率
+  const fullAttendanceCount = employees.filter(e => e.stats.isFullAttendance).length;
+  const fullAttendanceRate = employees.length > 0 ? ((fullAttendanceCount / employees.length) * 100).toFixed(1) : '0';
+
+  // (新员工考勤关注已迁移至进阶数据分析抽屉)
+
   // 检查数据是否正在加载
   const isLoading = !companyName || !companyEmployeeStats || !companyAggregate || employees.length === 0;
 
   if (!activeCompany) return null;
 
+  // 🔥 下拉菜单状态
+  const [showActionsMenu, setShowActionsMenu] = React.useState(false);
+  const actionsMenuRef = React.useRef<HTMLDivElement>(null);
+
+  // 🔥 点击外部关闭下拉菜单
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (actionsMenuRef.current && !actionsMenuRef.current.contains(event.target as Node)) {
+        setShowActionsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   return (
     <div className="bg-white dark:bg-slate-900/80 rounded-lg shadow-sm flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300 h-[calc(100vh-180px)]">
       <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex-shrink-0">
         <div className="flex justify-between items-center mb-6">
-          <div><h3 className="text-2xl font-bold text-slate-900 dark:text-white truncate" title={companyName}>{companyName}</h3></div>
-          <div className="flex flex-wrap items-center gap-2">
-              {/* 主要操作按钮组 */}
-              <div className="flex items-center gap-2">
-                  <button 
-                    onClick={() => onViewEmployeeList(activeCompany === '全部' ? '全部' : activeCompany)} 
-                    className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm"
-                  >
-                      <UsersIcon className="w-4 h-4" />
-                      <span>查看员工列表</span>
-                  </button>
-                  <button 
-                    onClick={() => onViewCalendar(activeCompany === '全部' ? '全部' : activeCompany)} 
-                    className="flex items-center gap-2 px-4 py-2 bg-sky-600 text-white text-sm font-medium rounded-lg hover:bg-sky-500 transition-all shadow-sm"
-                  >
-                      <CalendarIcon className="w-4 h-4" />
-                      <span>查看考勤日历</span>
-                  </button>
-              </div>
+          <div className="flex items-center gap-3">
+            <h3 className="text-2xl font-bold text-slate-900 dark:text-white truncate" title={companyName}>{companyName}</h3>
+            <span className="text-slate-300 dark:text-slate-600 text-lg font-medium select-none">&gt;</span>
+            <button
+              onClick={() => setAnalyticsSectionOpen(true)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-xs font-bold rounded-full hover:from-violet-500 hover:to-indigo-500 transition-all shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-[0.97]"
+              title="打开进阶数据分析面板"
+            >
+              📊 进阶分析
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+              {/* 主要操作按钮 */}
+              <button 
+                onClick={() => onViewCalendar(activeCompany === '全部' ? '全部' : activeCompany)} 
+                className="flex items-center gap-2 px-4 py-2 bg-sky-600 text-white text-sm font-medium rounded-lg hover:bg-sky-500 transition-all shadow-sm"
+              >
+                  <CalendarIcon className="w-4 h-4" />
+                  <span>查看考勤日历</span>
+              </button>
               
-              {/* 分隔线 */}
-              <div className="h-8 w-px bg-slate-200 dark:bg-slate-700"></div>
-              
-              {/* 次要操作按钮组 */}
-              <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1">
-                      <button 
-                        onClick={() => onDownloadReports(activeCompany, true)} 
-                        className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-l-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm"
-                        title="预览报表"
-                      >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                          </svg>
-                      </button>
-                      <button 
-                        onClick={() => onDownloadReports(activeCompany, false)} 
-                        className="flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-r-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm border-l-0"
-                        title="下载报表"
-                      >
-                          <DownloadIcon className="w-4 h-4" />
-                          <span>下载报表</span>
-                      </button>
-                  </div>
-                  {onCustomDownload && (
-                    <button 
-                      onClick={() => onCustomDownload(activeCompany)} 
-                      className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm"
+              {/* 🔥 创建考勤确认按钮 - 独立显示 */}
+              {onConfirmAttendance && (
+                <button 
+                  onClick={() => onConfirmAttendance(activeCompany)} 
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-500 transition-all shadow-sm"
+                  title="创建考勤确认单"
+                >
+                    <CheckCircleIcon className="w-4 h-4" />
+                    <span>创建考勤确认</span>
+                </button>
+              )}
+
+              {/* 🔥 推送报告按钮 - 独立显示 */}
+              {onPushReport && (
+                <button 
+                  onClick={() => onPushReport()} 
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400 text-sm font-medium rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-all shadow-sm"
+                  title="推送报告到钉钉"
+                >
+                    <SendIcon className="w-4 h-4" />
+                    <span>推送报告</span>
+                </button>
+              )}
+
+              {/* 🔥 更多操作下拉菜单 */}
+              <div className="relative" ref={actionsMenuRef}>
+                <button 
+                  onClick={() => setShowActionsMenu(!showActionsMenu)}
+                  className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm"
+                >
+                  <SlidersHorizontalIcon className="w-4 h-4" />
+                  <span>更多操作</span>
+                  <svg className={`w-4 h-4 transition-transform ${showActionsMenu ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                
+                {/* 下拉菜单内容 */}
+                {showActionsMenu && (
+                  <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-50 py-1">
+                    {/* 报表组：预览 + 操作日志 */}
+                    <button
+                      onClick={() => {
+                        onDownloadReports(activeCompany, true);
+                        setShowActionsMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
                     >
-                        <SlidersHorizontalIcon className="w-4 h-4" />
+                      <svg className="w-4 h-4 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                      <span>预览报表</span>
+                    </button>
+                    {onViewSnapshotLogs && (
+                      <button
+                        onClick={() => {
+                          onViewSnapshotLogs();
+                          setShowActionsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <ClipboardListIcon className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                        <span>报表操作日志</span>
+                      </button>
+                    )}
+                    
+                    <div className="h-px bg-slate-200 dark:bg-slate-700 my-1"></div>
+                    
+                    {/* 下载组：下载 + 自定义下载 */}
+                    <button
+                      onClick={() => {
+                        onDownloadReports(activeCompany, false);
+                        setShowActionsMenu(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                    >
+                      <DownloadIcon className="w-4 h-4 text-slate-600 dark:text-slate-400" />
+                      <span>下载报表</span>
+                    </button>
+                    {onCustomDownload && (
+                      <button
+                        onClick={() => {
+                          onCustomDownload(activeCompany);
+                          setShowActionsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <SlidersHorizontalIcon className="w-4 h-4 text-slate-600 dark:text-slate-400" />
                         <span>自定义下载</span>
-                    </button>
-                  )}
-                  {onPushReport && (
-                    <button 
-                      onClick={onPushReport} 
-                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-500 transition-all shadow-sm"
-                    >
-                        <SendIcon className="w-4 h-4" />
-                        <span>推送</span>
-                    </button>
-                  )}
+                      </button>
+                    )}
+                    
+                    <div className="h-px bg-slate-200 dark:bg-slate-700 my-1"></div>
+                    
+                    {/* 其他 */}
+                    {canViewAiAnalysis && (
+                      <button
+                        onClick={() => {
+                          if (!aiAnalysis && !isAnalysing) runMonthlyAnalysis();
+                          setShowAiModal(true);
+                          setShowActionsMenu(false);
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+                      >
+                        <SparklesIcon className="w-4 h-4 text-indigo-500" />
+                        <span>AI 智能月度诊断</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className={`grid grid-cols-1 ${fullAttendanceEnabled && fullAttendanceCount > 0 ? 'md:grid-cols-4' : 'md:grid-cols-3'} gap-4`}>
           <StatCard 
               title="总人数" 
               value={String(employees.length)} 
@@ -729,44 +916,33 @@ ${riskEmployeesList}
               onClick={() => openRiskModal(employees)}
               tooltip="本月考勤异常较严重的员工数。&#10;判定标准：&#10;1. 豁免后迟到 > 30分钟&#10;2. 缺卡 > 3次&#10;3. 旷工 ≥ 1次"
           />
+          {fullAttendanceEnabled && fullAttendanceCount > 0 && (
+            <StatCard 
+                title="全勤率" 
+                value={`${fullAttendanceRate}%`}
+                subValue={`${fullAttendanceCount}/${employees.length} 人全勤`}
+                icon={<CheckCircleIcon className="w-6 h-6 text-emerald-600" />} 
+                tooltip={`全勤率 = 全勤人数 / 总人数 × 100%&#10;全勤人数：${fullAttendanceCount}人&#10;总人数：${employees.length}人&#10;点击查看全勤员工列表`}
+                onClick={() => setShowFullAttendanceModal(true)}
+            />
+          )}
         </div>
       </div>
 
-      <div className="flex flex-col flex-1 min-h-0 gap-4">
-        <div className="flex-shrink-0 px-6">
-            <AccordionSection title="数据分析与洞察" icon={<TrendingUpIcon className="w-5 h-5 text-indigo-500 " />} isSticky={false}>
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <div className="px-6">
+            <AccordionSection
+              title="数据分析与洞察"
+              icon={<LightbulbIcon className="w-5 h-5 text-amber-500" />}
+              isSticky={true}
+              isOpen={insightSectionOpen}
+              onToggle={setInsightSectionOpen}
+
+            >
             {/* Reduced vertical padding here */}
             <div className="my-2 ml-1 mr-1">
-                {/* Ranking Mode Toggle */}
-                <div className="flex justify-end mb-2">
-                    <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-1">
-                        <button
-                            onClick={() => setRankingMode('late')}
-                            className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                                rankingMode === 'late'
-                                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
-                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                            }`}
-                        >
-                            迟到数据
-                        </button>
-                        <button
-                            onClick={() => setRankingMode('fullAttendance')}
-                            className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                                rankingMode === 'fullAttendance'
-                                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
-                                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                            }`}
-                        >
-                            全勤数据
-                        </button>
-                    </div>
-                </div>
-                
-                {/* Ranking Lists Row */}
+                {/* 排行榜区域 */}
                 <div className="flex flex-wrap gap-2 bg-white dark:bg-slate-900/40 p-2 rounded-lg border border-slate-100 dark:border-slate-700/50">
-                    {rankingMode === 'late' ? (
-                        <>
                             {/* 🔥 先渲染有数据的卡片，再渲染没有数据的卡片 */}
                             {[
                                 { type: 'exemptedLateMinutes', icon: <ClockIcon className="w-3 h-3" />, color: 'text-orange-600 dark:text-orange-400' },
@@ -774,32 +950,24 @@ ${riskEmployeesList}
                                 { type: 'absenteeism', icon: <AlertTriangleIcon className="w-3 h-3" />, color: 'text-red-800 dark:text-red-600' },
                                 { type: 'overtimeTotalMinutes', icon: <SparklesIcon className="w-3 h-3" />, color: 'text-blue-600 dark:text-blue-400' },
                                 { type: 'sickHours', icon: <ActivityIcon className="w-3 h-3" />, color: 'text-rose-600 dark:text-rose-400' },
-                                { type: 'personalHours', icon: <UserMinusIcon className="w-3 h-3" />, color: 'text-yellow-600 dark:text-yellow-400' }
+                                { type: 'personalHours', icon: <UserMinusIcon className="w-3 h-3" />, color: 'text-yellow-600 dark:text-yellow-400' },
                             ]
                             .sort((a, b) => {
                                 // 计算每个类型是否有数据
-                                const aHasData = employees.some(e => {
-                                    const value = a.type === 'exemptedLateMinutes' 
+                                const getHasData = (type: string) => employees.some(e => {
+                                    const value = type === 'exemptedLateMinutes' 
                                         ? (lateExemptionEnabled ? (e.stats.exemptedLateMinutes || 0) : (e.stats.lateMinutes || 0))
-                                        : a.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
-                                        : a.type === 'sickHours' ? (e.stats.sickHours || 0)
-                                        : a.type === 'personalHours' ? (e.stats.personalHours || 0)
-                                        : a.type === 'missing' ? (e.stats.missing || 0)
-                                        : a.type === 'absenteeism' ? (e.stats.absenteeism || 0)
+                                        : type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
+                                        : type === 'sickHours' ? (e.stats.sickHours || 0)
+                                        : type === 'personalHours' ? (e.stats.personalHours || 0)
+                                        : type === 'missing' ? (e.stats.missing || 0)
+                                        : type === 'absenteeism' ? (e.stats.absenteeism || 0)
+                                        : type === 'fullAttendance' ? (e.stats.isFullAttendance ? 1 : 0)
                                         : 0;
                                     return value > 0;
                                 });
-                                const bHasData = employees.some(e => {
-                                    const value = b.type === 'exemptedLateMinutes' 
-                                        ? (lateExemptionEnabled ? (e.stats.exemptedLateMinutes || 0) : (e.stats.lateMinutes || 0))
-                                        : b.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
-                                        : b.type === 'sickHours' ? (e.stats.sickHours || 0)
-                                        : b.type === 'personalHours' ? (e.stats.personalHours || 0)
-                                        : b.type === 'missing' ? (e.stats.missing || 0)
-                                        : b.type === 'absenteeism' ? (e.stats.absenteeism || 0)
-                                        : 0;
-                                    return value > 0;
-                                });
+                                const aHasData = getHasData(a.type);
+                                const bHasData = getHasData(b.type);
                                 // 有数据的排在前面
                                 if (aHasData && !bHasData) return -1;
                                 if (!aHasData && bHasData) return 1;
@@ -820,59 +988,10 @@ ${riskEmployeesList}
                                     )}
                                 </React.Fragment>
                             ))}
-                        </>
-                    ) : (
-                        <>
-                            {/* 🔥 全勤模式：先渲染有数据的卡片，再渲染没有数据的卡片 */}
-                            {[
-                                { type: 'fullAttendance', icon: <CheckCircleIcon className="w-3 h-3" />, color: 'text-green-600 dark:text-green-400', employees: employees.filter(e => e.stats.isFullAttendance) },
-                                { type: 'overtimeTotalMinutes', icon: <SparklesIcon className="w-3 h-3" />, color: 'text-blue-600 dark:text-blue-400', employees: employees },
-                                { type: 'sickHours', icon: <ActivityIcon className="w-3 h-3" />, color: 'text-rose-600 dark:text-rose-400', employees: employees },
-                                { type: 'personalHours', icon: <UserMinusIcon className="w-3 h-3" />, color: 'text-yellow-600 dark:text-yellow-400', employees: employees }
-                            ]
-                            .sort((a, b) => {
-                                // 计算每个类型是否有数据
-                                const aHasData = a.employees.some(e => {
-                                    const value = a.type === 'fullAttendance' ? (e.stats.isFullAttendance ? 1 : 0)
-                                        : a.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
-                                        : a.type === 'sickHours' ? (e.stats.sickHours || 0)
-                                        : a.type === 'personalHours' ? (e.stats.personalHours || 0)
-                                        : 0;
-                                    return value > 0;
-                                });
-                                const bHasData = b.employees.some(e => {
-                                    const value = b.type === 'fullAttendance' ? (e.stats.isFullAttendance ? 1 : 0)
-                                        : b.type === 'overtimeTotalMinutes' ? (e.stats.overtimeTotalMinutes || 0)
-                                        : b.type === 'sickHours' ? (e.stats.sickHours || 0)
-                                        : b.type === 'personalHours' ? (e.stats.personalHours || 0)
-                                        : 0;
-                                    return value > 0;
-                                });
-                                // 有数据的排在前面
-                                if (aHasData && !bHasData) return -1;
-                                if (!aHasData && bHasData) return 1;
-                                return 0;
-                            })
-                            .map((item, index, array) => (
-                                <React.Fragment key={item.type}>
-                                    <TopStatsList 
-                                        employees={item.employees} 
-                                        type={item.type} 
-                                        icon={item.icon} 
-                                        color={item.color} 
-                                        onShowFull={handleShowRanking} 
-                                    />
-                                    {index < array.length - 1 && (
-                                        <div className="w-px bg-slate-100 dark:bg-slate-700 self-stretch my-2"></div>
-                                    )}
-                                </React.Fragment>
-                            ))}
-                        </>
-                    )}
                 </div>
                 
                 <div className="flex gap-4 mt-4 h-48 w-full">
-                    {/* Chart Area */}
+                    {/* Chart Area - 占满宽度 */}
                     <div className="flex-1 bg-white dark:bg-slate-900/40 rounded-lg border border-slate-100 dark:border-slate-700 p-1 min-w-0">
                         <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2 ml-2">本月异常趋势 (迟到/缺卡/请假)</div>
                         <ResponsiveContainer width="100%" height="100%">
@@ -945,59 +1064,24 @@ ${riskEmployeesList}
                             </AreaChart>
                         </ResponsiveContainer>
                     </div>
-
-                    {/* AI Analysis Box */}
-                    {canViewAiAnalysis && (
-                        <div className="w-1/3 bg-gradient-to-br from-indigo-50 to-white dark:from-slate-800 dark:to-slate-900 rounded-lg border border-indigo-100 dark:border-slate-700 p-4 relative overflow-hidden flex flex-col">
-                            <div className="absolute top-0 right-0 p-2 opacity-10"><SparklesIcon className="w-16 h-16 text-indigo-500" /></div>
-                            <div className="flex items-center justify-between mb-2 relative z-10 flex-shrink-0">
-                                <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-100 flex items-center gap-2"><SparklesIcon className="w-4 h-4 text-indigo-500" />AI 智能月度诊断</h4>
-                                <div className="flex items-center gap-2">
-                                    {isAnalysing && <Loader2Icon className="w-3 h-3 animate-spin text-indigo-500" />}
-                                    {aiAnalysis && !isAnalysing && (
-                                        <>
-                                            <button 
-                                                onClick={() => runMonthlyAnalysis(true)}
-                                                className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded transition-colors"
-                                                title="重新分析"
-                                            >
-                                                <RefreshCwIcon className="w-3 h-3" />
-                                                重新分析
-                                            </button>
-                                            <button 
-                                                onClick={() => setShowAiModal(true)}
-                                                className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/30 rounded transition-colors"
-                                                title="展开查看完整内容"
-                                            >
-                                                <ChevronRightIcon className="w-3 h-3" />
-                                                展开
-                                            </button>
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-                            <div className="relative z-10 overflow-y-auto pr-1 custom-scrollbar flex-1 text-xs">
-                                {isAnalysing ? (
-                                    <div className="space-y-2 animate-pulse mt-2">
-                                        <div className="h-3 bg-indigo-200/50 dark:bg-slate-700 rounded w-3/4"></div>
-                                        <div className="h-3 bg-indigo-200/50 dark:bg-slate-700 rounded w-full"></div>
-                                        <div className="h-3 bg-indigo-200/50 dark:bg-slate-700 rounded w-5/6"></div>
-                                    </div>
-                                ) : (
-                                    <div>{aiAnalysis ? <EnhancedMarkdownRenderer text={aiAnalysis} /> : <p className="text-slate-500 italic">暂无分析数据。</p>}</div>
-                                )}
-                            </div>
-                        </div>
-                    )}
                 </div>
+
+
             </div>
             </AccordionSection>
         </div>
 
-        {/* Separated Stats Table */}
-        <div className="flex-1 min-h-0 overflow-hidden px-6 pb-6">
+        {/* 考勤明细列表 */}
+        <div className="px-6 pb-6">
+          <AccordionSection
+            title={`考勤明细列表 (${employees.length} 人)`}
+            icon={<ClipboardListIcon className="w-5 h-5 text-sky-500" />}
+            isSticky={true}
+            isOpen={tableSectionOpen}
+            onToggle={setTableSectionOpen}
+          >
             {isLoading ? (
-              <div className="h-full flex items-center justify-center bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+              <div className="flex items-center justify-center py-12">
                 <div className="text-center">
                   <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-sky-600 mb-3"></div>
                   <p className="text-slate-600 dark:text-slate-400 text-sm">正在加载员工考勤数据...</p>
@@ -1009,7 +1093,7 @@ ${riskEmployeesList}
                 </div>
               </div>
             ) : employees.length === 0 ? (
-              <div className="h-full flex items-center justify-center bg-white dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700">
+              <div className="flex items-center justify-center py-12">
                 <div className="text-center">
                   <div className="text-slate-400 mb-2">
                     <UsersIcon className="w-12 h-12 mx-auto mb-2" />
@@ -1019,10 +1103,32 @@ ${riskEmployeesList}
                 </div>
               </div>
             ) : (
-              <AttendanceStatsTable employees={employees} onRowClick={onSelectEmployeeForAnalysis} companyName={companyName} lateExemptionEnabled={lateExemptionEnabled} fullAttendanceEnabled={fullAttendanceEnabled} performancePenaltyEnabled={performancePenaltyEnabled} />
+              <div className="max-h-[60vh] overflow-y-auto">
+                <AttendanceStatsTable employees={employees} onRowClick={onSelectEmployeeForAnalysis} companyName={companyName} lateExemptionEnabled={lateExemptionEnabled} fullAttendanceEnabled={fullAttendanceEnabled} performancePenaltyEnabled={performancePenaltyEnabled} />
+              </div>
             )}
+          </AccordionSection>
         </div>
       </div>
+
+      {/* 进阶数据分析抽屉 */}
+      <AttendanceAnalytics
+        companyEmployeeStats={companyEmployeeStats}
+        companyAggregate={companyAggregate}
+        attendanceMap={attendanceMap}
+        processDataMap={processDataMap}
+        holidays={holidays}
+        activeCompany={activeCompany}
+        year={year}
+        month={month}
+        allUsers={employees.map(e => e.user)}
+        dailyTrend={dailyTrend}
+        lateExemptionEnabled={lateExemptionEnabled}
+        isOpen={analyticsSectionOpen}
+        onToggle={(open) => {
+          setAnalyticsSectionOpen(open);
+        }}
+      />
 
       {/* Risk Modal */}
       <Modal isOpen={showRiskModal} onClose={() => setShowRiskModal(false)} title="纪律风险人员名单" size="lg">
@@ -1086,16 +1192,70 @@ ${riskEmployeesList}
           />
       )}
 
+      {/* Full Attendance Modal */}
+      <Modal isOpen={showFullAttendanceModal} onClose={() => setShowFullAttendanceModal(false)} title={`全勤员工列表 (${fullAttendanceCount} 人)`} size="md">
+        <div className="max-h-[60vh] overflow-y-auto">
+          <div className="mb-3 text-xs text-slate-500 dark:text-slate-400 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg p-3">
+            全勤率 {fullAttendanceRate}%，共 {fullAttendanceCount}/{employees.length} 人达成全勤
+          </div>
+          <table className="w-full text-sm text-left">
+            <thead className="text-xs text-slate-500 uppercase bg-slate-50 dark:bg-slate-700 sticky top-0">
+              <tr>
+                <th className="px-4 py-2 w-16 text-center">#</th>
+                <th className="px-4 py-2">姓名</th>
+                <th className="px-4 py-2">部门</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+              {employees.filter(e => e.stats.isFullAttendance).map((e, idx) => (
+                <tr key={e.user.userid} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                  <td className="px-4 py-2 text-center">
+                    <span className={`inline-block w-5 h-5 text-center leading-5 rounded-full text-xs ${
+                      idx < 3 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400' : 'text-slate-500'
+                    }`}>{idx + 1}</span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <Avatar name={e.user.name} avatarUrl={e.user.avatar} size="sm" />
+                      <span className="font-medium text-slate-700 dark:text-slate-200">{e.user.name}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2 text-slate-500 dark:text-slate-400">{e.user.department || '-'}</td>
+                </tr>
+              ))}
+              {fullAttendanceCount === 0 && (
+                <tr><td colSpan={3} className="text-center py-4 text-slate-400">暂无全勤员工</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Modal>
+
       {/* AI Analysis Modal */}
       <Modal isOpen={showAiModal} onClose={() => setShowAiModal(false)} title="AI 智能月度诊断" size="2xl">
         <div className="max-h-[70vh] overflow-y-auto pr-2">
-          {aiAnalysis ? (
+          {isAnalysing ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3">
+              <Loader2Icon className="w-8 h-8 animate-spin text-indigo-500" />
+              <p className="text-slate-500 text-sm">正在分析考勤数据...</p>
+            </div>
+          ) : aiAnalysis ? (
             <div className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
               <EnhancedMarkdownRenderer text={aiAnalysis} />
             </div>
           ) : (
-            <p className="text-slate-500 italic text-center py-8">暂无分析数据</p>
+            <p className="text-slate-500 italic text-center py-8">暂无分析数据，请点击下方按钮开始分析</p>
           )}
+        </div>
+        <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-700 flex justify-end">
+          <button
+            onClick={() => runMonthlyAnalysis(true)}
+            disabled={isAnalysing}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/30 transition-colors disabled:opacity-50"
+          >
+            <RefreshCwIcon className={`w-4 h-4 ${isAnalysing ? 'animate-spin' : ''}`} />
+            {isAnalysing ? '分析中...' : '重新分析'}
+          </button>
         </div>
       </Modal>
     </div>

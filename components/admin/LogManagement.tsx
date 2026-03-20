@@ -575,6 +575,11 @@ export const LogManagement: React.FC<LogManagementProps> = ({
                           {log.details}
                         </div>
                       )}
+                      {log.editReason && log.editReason !== log.details && (
+                        <div className="text-xs text-amber-700 dark:text-amber-300 mt-1 bg-amber-50 dark:bg-amber-900/20 px-2 py-1 rounded">
+                          备注: {log.editReason}
+                        </div>
+                      )}
                     </div>
                   </div>
                   

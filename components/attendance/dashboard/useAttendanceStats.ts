@@ -1009,53 +1009,69 @@ export const useAttendanceStats = (
             }
             
             // 🔥 统一计算豁免（根据配置的豁免模式）
+            // 🔥 修复：只有在豁免功能启用时才执行豁免计算
+            const lateExemptionEnabled = ruleEngine.getRules().lateExemptionEnabled;
+            
             if (stats.lateRecords && stats.lateRecords.length > 0) {
-                const exemptionMode = ruleEngine.getRules().lateExemptionMode || 'byDate';
-                const maxExemptions = ruleEngine.getRules().lateExemptionCount;
-                const exemptionThreshold = ruleEngine.getRules().lateExemptionMinutes;
-                
-                // 🔥 调试：记录豁免计算前的状态
-                if (user.name === '岳可') {
-                    console.log(`[豁免计算] ${user.name} - 迟到记录:`, stats.lateRecords);
-                    console.log(`[豁免计算] ${user.name} - 累计迟到: ${stats.lateMinutes}分钟，豁免模式: ${exemptionMode}，最大豁免次数: ${maxExemptions}，豁免阈值: ${exemptionThreshold}分钟`);
-                }
-                
-                // 根据豁免模式排序迟到记录
-                let sortedLateRecords = [...stats.lateRecords];
-                if (exemptionMode === 'byMinutes') {
-                    // 按迟到分钟数从大到小排序
-                    sortedLateRecords.sort((a, b) => b.minutes - a.minutes);
-                } else {
-                    // 按日期从月初到月末排序（默认）
-                    sortedLateRecords.sort((a, b) => a.day - b.day);
-                }
-                
-                // 应用豁免
-                let exemptionUsed = 0;
-                stats.exemptedLateMinutes = 0;
-                
-                sortedLateRecords.forEach(record => {
-                    if (exemptionUsed < maxExemptions && record.isWorkday) {
-                        if (record.minutes <= exemptionThreshold) {
-                            // 完全豁免
-                            exemptionUsed++;
-                        } else {
-                            // 部分豁免
-                            stats.exemptedLateMinutes += (record.minutes - exemptionThreshold);
-                            exemptionUsed++;
-                        }
-                    } else {
-                        // 不豁免
-                        stats.exemptedLateMinutes += record.minutes;
+                if (lateExemptionEnabled) {
+                    // 豁免功能启用，执行豁免计算
+                    const exemptionMode = ruleEngine.getRules().lateExemptionMode || 'byDate';
+                    const maxExemptions = ruleEngine.getRules().lateExemptionCount;
+                    const exemptionThreshold = ruleEngine.getRules().lateExemptionMinutes;
+                    
+                    // 🔥 调试：记录豁免计算前的状态
+                    if (user.name === '岳可') {
+                        console.log(`[豁免计算] ${user.name} - 迟到记录:`, stats.lateRecords);
+                        console.log(`[豁免计算] ${user.name} - 累计迟到: ${stats.lateMinutes}分钟，豁免模式: ${exemptionMode}，最大豁免次数: ${maxExemptions}，豁免阈值: ${exemptionThreshold}分钟`);
                     }
-                });
-                
-                stats.monthlyExemptionUsed = exemptionUsed;
-                (stats as any).exemptedLate = exemptionUsed;
-                
-                // 🔥 调试：记录豁免计算后的结果
-                if (user.name === '岳可') {
-                    console.log(`[豁免计算] ${user.name} - 豁免后迟到: ${stats.exemptedLateMinutes}分钟，已使用豁免次数: ${exemptionUsed}`);
+                    
+                    // 根据豁免模式排序迟到记录
+                    let sortedLateRecords = [...stats.lateRecords];
+                    if (exemptionMode === 'byMinutes') {
+                        // 按迟到分钟数从大到小排序
+                        sortedLateRecords.sort((a, b) => b.minutes - a.minutes);
+                    } else {
+                        // 按日期从月初到月末排序（默认）
+                        sortedLateRecords.sort((a, b) => a.day - b.day);
+                    }
+                    
+                    // 应用豁免
+                    let exemptionUsed = 0;
+                    stats.exemptedLateMinutes = 0;
+                    
+                    sortedLateRecords.forEach(record => {
+                        if (exemptionUsed < maxExemptions && record.isWorkday) {
+                            if (record.minutes <= exemptionThreshold) {
+                                // 完全豁免
+                                exemptionUsed++;
+                            } else {
+                                // 部分豁免
+                                stats.exemptedLateMinutes += (record.minutes - exemptionThreshold);
+                                exemptionUsed++;
+                            }
+                        } else {
+                            // 不豁免
+                            stats.exemptedLateMinutes += record.minutes;
+                        }
+                    });
+                    
+                    stats.monthlyExemptionUsed = exemptionUsed;
+                    (stats as any).exemptedLate = exemptionUsed;
+                    
+                    // 🔥 调试：记录豁免计算后的结果
+                    if (user.name === '岳可') {
+                        console.log(`[豁免计算] ${user.name} - 豁免后迟到: ${stats.exemptedLateMinutes}分钟，已使用豁免次数: ${exemptionUsed}`);
+                    }
+                } else {
+                    // 🔥 豁免功能关闭，直接使用原始迟到分钟数
+                    stats.exemptedLateMinutes = stats.lateMinutes;
+                    stats.monthlyExemptionUsed = 0;
+                    (stats as any).exemptedLate = 0;
+                    
+                    // 🔥 调试：记录未启用豁免的情况
+                    if (user.name === '岳可') {
+                        console.log(`[豁免计算] ${user.name} - 豁免功能未启用，直接使用原始迟到: ${stats.exemptedLateMinutes}分钟`);
+                    }
                 }
                 
                 // 清理临时数据

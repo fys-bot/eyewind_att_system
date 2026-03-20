@@ -10,6 +10,7 @@ import { upsertAttendanceDataToDb } from './api.ts';
 import { RemarksEditor } from './Modals.tsx';
 import { getDefaultMonth } from '../utils.ts';
 import { AttendanceRuleManager } from '../AttendanceRuleEngine.ts';
+import { saveReportSnapshot } from '../../../services/reportSnapshotApiService.ts';
 
 // --- Local Helper Components ---
 
@@ -148,13 +149,25 @@ export const CreateAttendanceWizard: React.FC<{
     onCreateSheet: (sheet: Omit<AttendanceSheet, 'id' | 'createdAt'>) => void;
     dingTalkUsers: DingTalkUser[];
     isDingTalkDataLoading: boolean;
-    preloadedData?: { data: EmployeeAttendanceRecord[]; month: string } | null;
-}> = ({ onBack, mainCompany, onCreateSheet, dingTalkUsers, isDingTalkDataLoading, preloadedData }) => {
+    preloadedData?: { data: EmployeeAttendanceRecord[]; month: string; source?: 'dashboard' | 'calendar' } | null;
+    holidays?: Record<string, { holiday: boolean; name?: string }>; // 🔥 新增：节假日数据
+    customDays?: Array<{ date: string; type: 'workday' | 'holiday'; reason: string }>; // 🔥 新增：自定义调班规则
+}> = ({ onBack, mainCompany, onCreateSheet, dingTalkUsers, isDingTalkDataLoading, preloadedData, holidays = {}, customDays = [] }) => {
+    // 🔥 构建自定义日期调整 Map
+    const customDayMap = useMemo(() => {
+        const map = new Map<string, { type: string; reason: string }>();
+        customDays.forEach(day => {
+            map.set(day.date, { type: day.type, reason: day.reason });
+        });
+        return map;
+    }, [customDays]);
+    
     const [step, setStep] = useState(preloadedData ? 2 : 1);
     const [fileName, setFileName] = useState<string | null>(preloadedData ? '从考勤管理导入' : null);
     const [parsedData, setParsedData] = useState<EmployeeAttendanceRecord[] | null>(preloadedData?.data || null);
     const [fileError, setFileError] = useState<string | null>(null);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const [isSavingSnapshot, setIsSavingSnapshot] = useState(false);
 
     // Modals state
     const [isChangeResponderModalOpen, setIsChangeResponderModalOpen] = useState(false);
@@ -570,6 +583,90 @@ export const CreateAttendanceWizard: React.FC<{
         }
     };
 
+    // 🔥 保存考勤确认单数据到数据库
+    const handleSaveSnapshotToDb = async () => {
+        if (!parsedData || parsedData.length === 0) { alert('没有数据可保存'); return; }
+        setIsSavingSnapshot(true);
+        try {
+            // 🔥 公司名映射函数
+            const resolveCompanyId = (name: string | null | undefined): string => {
+                if (!name) return 'eyewind';
+                if (name === 'hydodo' || name.includes('海多多')) return 'hydodo';
+                if (name === 'naoli' || name.includes('脑力')) return 'naoli';
+                if (name === 'haike' || name.includes('海科')) return 'haike';
+                if (name === 'qianbing' || name.includes('浅冰')) return 'qianbing';
+                if (name === 'eyewind' || name.includes('风眼')) return 'eyewind';
+                return 'eyewind';
+            };
+            const displayNameMap: Record<string, string> = {
+                eyewind: '深圳市风眼科技有限公司', hydodo: '深圳市海多多科技有限公司',
+                naoli: '深圳市脑力科技有限公司', haike: '深圳市海科科技有限公司', qianbing: '深圳市浅冰科技有限公司',
+            };
+
+            // 🔥 按公司分组员工数据
+            const companyGroups: Record<string, typeof parsedData> = {};
+            for (const record of parsedData) {
+                const cid = resolveCompanyId(record.mainCompany);
+                if (!companyGroups[cid]) companyGroups[cid] = [];
+                companyGroups[cid].push(record);
+            }
+
+            const results: string[] = [];
+            // 🔥 按公司分别保存
+            for (const [companyId, groupRecords] of Object.entries(companyGroups)) {
+                const companyDisplayName = displayNameMap[companyId] || companyId;
+                const headers = allHeaders;
+                const rows = groupRecords.map((record, idx) => {
+                    return allHeaders.map(header => {
+                        if (header === '序号') return String(idx + 1);
+                        if (header === '姓名') return record.employeeName;
+                        if (/^\d+$/.test(header)) {
+                            const dayVal = record.dailyData[header];
+                            if (typeof dayVal === 'object' && dayVal !== null) {
+                                return (dayVal as any).displayText || (dayVal as any).status || '';
+                            }
+                            return dayVal || '';
+                        }
+                        // 汇总字段从 dailyData 中取
+                        const val = record.dailyData[header];
+                        if (val !== undefined && val !== null) return String(val);
+                        const recVal = (record as any)[header];
+                        return recVal !== undefined && recVal !== null ? String(recVal) : '';
+                    });
+                });
+
+                // 计算红框数
+                let redFrameCount = 0;
+                rows.forEach(row => {
+                    row.forEach(cell => {
+                        if (cell.includes('缺卡') || cell === '旷工') redFrameCount++;
+                    });
+                });
+
+                const result = await saveReportSnapshot({
+                    companyId,
+                    companyDisplayName,
+                    yearMonth: month,
+                    reportType: 'attendance',
+                    tabName: `${companyDisplayName}-考勤表`,
+                    headers,
+                    rows,
+                    redFrameCount,
+                    editCount: 0,
+                    editLogs: [],
+                });
+                results.push(`${companyDisplayName} v${result.version}`);
+            }
+
+            alert(`保存成功：${results.join('、')}`);
+        } catch (err: any) {
+            console.error('[考勤确认单保存快照] 失败:', err);
+            alert('保存失败: ' + (err.message || '未知错误'));
+        } finally {
+            setIsSavingSnapshot(false);
+        }
+    };
+
     const wizardSteps = [
         { label: "上传考勤报表", icon: <UploadCloudIcon className="w-6 h-6" /> },
         { label: "预览表格数据", icon: <GridIcon className="w-6 h-6" /> },
@@ -662,7 +759,7 @@ export const CreateAttendanceWizard: React.FC<{
             <header className="mb-8">
                 <button onClick={onBack} className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white mb-2">
                     <ChevronLeftIcon className="w-4 h-4" />
-                    {preloadedData ? '返回考勤日历' : '返回'}
+                    {preloadedData ? (preloadedData.source === 'calendar' ? '返回考勤日历' : '返回仪表盘') : '返回'}
                 </button>
                 <h2 className="text-3xl font-bold text-slate-900 dark:text-white">创建考勤确认</h2>
             </header>
@@ -684,20 +781,63 @@ export const CreateAttendanceWizard: React.FC<{
                                 点击单元格可修改考勤状态或备注
                             </span>
                         </div>
-                        <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700 max-h-[50vh]">
-                            <table className="w-full text-sm text-center">
+                        <div className="overflow-x-auto overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 max-h-[60vh]">
+                            <table className="w-full text-sm text-center border-collapse">
                                 <thead className="sticky top-0 bg-slate-50 dark:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 uppercase z-10">
                                     <tr>
-                                        {allHeaders.map(header => (
-                                            <th key={header} className={`px-4 py-3 whitespace-nowrap ${header === '备注' ? 'min-w-[300px] text-left' : ''}`}>
-                                                {header}
-                                            </th>
-                                        ))}
+                                        {allHeaders.map(header => {
+                                            // 根据列类型设置不同的宽度
+                                            let headerClass = 'px-3 py-3 border-b border-slate-200 dark:border-slate-700';
+                                            
+                                            // 🔥 判断是否为法定节假日列
+                                            const isDateColumn = /^\d+$/.test(header);
+                                            let isHoliday = false;
+                                            if (isDateColumn && parsedData && parsedData.length > 0) {
+                                                const month = parsedData[0].month || '';
+                                                const dateKey = `${month}-${String(header).padStart(2, '0')}`;
+                                                const fullDateKey = `${month.split('-')[0]}-${month.split('-')[1] || month}-${String(header).padStart(2, '0')}`;
+                                                
+                                                // 🔥 优先级：customDays > holidays
+                                                const customDay = customDayMap.get(fullDateKey);
+                                                if (customDay) {
+                                                    isHoliday = customDay.type === 'holiday';
+                                                } else {
+                                                    const holidayInfo = holidays[dateKey];
+                                                    isHoliday = holidayInfo?.holiday === true;
+                                                }
+                                            }
+                                            
+                                            if (header === '备注') {
+                                                headerClass += ' min-w-[500px] text-left';
+                                            } else if (header === '序号') {
+                                                headerClass += ' w-16';
+                                            } else if (header === '姓名') {
+                                                headerClass += ' min-w-[100px]';
+                                            } else if (header === '部门') {
+                                                headerClass += ' min-w-[120px]';
+                                            } else if (isDateColumn) {
+                                                // 日期列
+                                                headerClass += ' min-w-[40px]';
+                                                // 🔥 法定节假日列显示灰色背景
+                                                if (isHoliday) {
+                                                    headerClass += ' bg-slate-200 dark:bg-slate-700';
+                                                }
+                                            } else {
+                                                // 其他汇总列
+                                                headerClass += ' min-w-[100px]';
+                                            }
+                                            
+                                            return (
+                                                <th key={header} className={headerClass}>
+                                                    {header}
+                                                </th>
+                                            );
+                                        })}
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white dark:bg-slate-800/50 divide-y divide-slate-200 dark:divide-slate-700">
+                                <tbody className="bg-white dark:bg-slate-800/50">
                                     {parsedData.map((record, index) => (
-                                        <tr key={record.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors">
+                                        <tr key={record.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors border-b border-slate-100 dark:border-slate-700">
                                             {allHeaders.map(header => {
                                                 const isEditableDate = dayHeaders.includes(header);
                                                 const isEditableRemark = header === '备注';
@@ -721,14 +861,59 @@ export const CreateAttendanceWizard: React.FC<{
                                                 }
 
                                                 const isInteractive = isEditableDate || isEditableRemark || isEditableSummary;
+                                                
+                                                // 🔥 判断是否为法定节假日列
+                                                const isDateColumn = /^\d+$/.test(header);
+                                                let isHoliday = false;
+                                                if (isDateColumn) {
+                                                    const month = record.month || '';
+                                                    const dateKey = `${month}-${String(header).padStart(2, '0')}`;
+                                                    const fullDateKey = `${month.split('-')[0]}-${month.split('-')[1] || month}-${String(header).padStart(2, '0')}`;
+                                                    
+                                                    // 🔥 优先级：customDays > holidays
+                                                    const customDay = customDayMap.get(fullDateKey);
+                                                    if (customDay) {
+                                                        isHoliday = customDay.type === 'holiday';
+                                                    } else {
+                                                        const holidayInfo = holidays[dateKey];
+                                                        isHoliday = holidayInfo?.holiday === true;
+                                                    }
+                                                }
+                                                
+                                                // 根据列类型设置不同的样式
+                                                let tdClass = 'px-3 py-2 border-r border-slate-100 dark:border-slate-700';
+                                                
+                                                // 🔥 缺卡/旷工红框高亮
+                                                const isMissingOrAbsent = value.includes('缺卡') || value === '旷工';
+                                                if (isMissingOrAbsent) {
+                                                    tdClass += ' ring-2 ring-inset ring-red-400 bg-red-50 dark:bg-red-900/20';
+                                                }
+                                                // 🔥 法定节假日列显示灰色背景
+                                                else if (isHoliday) {
+                                                    tdClass += ' bg-slate-100 dark:bg-slate-800';
+                                                }
+                                                
+                                                if (header === '备注') {
+                                                    tdClass += ' text-left align-top';
+                                                } else if (header === '序号' || isDateColumn) {
+                                                    tdClass += ' text-center';
+                                                } else {
+                                                    tdClass += ' text-center';
+                                                }
+                                                
+                                                if (isInteractive) {
+                                                    tdClass += ' cursor-pointer hover:bg-sky-50 dark:hover:bg-sky-900/20';
+                                                }
 
                                                 return (
                                                     <td 
                                                         key={`${record.id}-${header}`} 
-                                                        className={`px-4 py-2 whitespace-nowrap ${header === '备注' ? 'text-left whitespace-pre-wrap' : ''} ${isInteractive ? 'cursor-pointer hover:bg-sky-50 dark:hover:bg-sky-900/20' : ''}`}
+                                                        className={tdClass}
                                                         onClick={(e) => handleCellClick(record, header, e)}
                                                     >
-                                                        <span className={cellStyle}>{value}</span>
+                                                        <div className={`${header === '备注' ? 'whitespace-pre-wrap break-words' : 'whitespace-nowrap'} ${cellStyle}`}>
+                                                            {value}
+                                                        </div>
                                                     </td>
                                                 );
                                             })}
@@ -739,7 +924,7 @@ export const CreateAttendanceWizard: React.FC<{
                         </div>
                         <div className="flex justify-center gap-4 mt-8">
                             <button onClick={() => preloadedData ? onBack() : setStep(1)} className="px-6 py-2 bg-slate-200 dark:bg-slate-600 rounded-md">
-                                {preloadedData ? '返回考勤日历' : '重新上传'}
+                                {preloadedData ? '返回仪表盘' : '重新上传'}
                             </button>
                             {/* New Save Button */}
                             <button 
@@ -748,6 +933,14 @@ export const CreateAttendanceWizard: React.FC<{
                                 className={`px-6 py-2 rounded-md flex items-center gap-2 transition-colors ${hasUnsavedChanges ? 'bg-indigo-600 text-white hover:bg-indigo-500' : 'bg-slate-200 dark:bg-slate-700 text-slate-400 cursor-not-allowed'}`}
                             >
                                 <SaveIcon className="w-4 h-4" /> 保存
+                            </button>
+                            <button
+                                onClick={handleSaveSnapshotToDb}
+                                disabled={isSavingSnapshot}
+                                className="px-6 py-2 rounded-md flex items-center gap-2 transition-colors bg-emerald-600 text-white hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isSavingSnapshot ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <SaveIcon className="w-4 h-4" />}
+                                {isSavingSnapshot ? '入库中...' : '保存入库'}
                             </button>
                             <button onClick={() => setStep(3)} className="px-6 py-2 bg-sky-600 text-white rounded-md">下一步</button>
                         </div>

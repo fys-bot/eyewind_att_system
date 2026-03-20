@@ -1,7 +1,8 @@
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import ReactDOM from 'react-dom';
 import type { DingTalkUser, CompanyCounts, DailyAttendanceStatus, HolidayMap, AttendanceMap, EmployeeAttendanceRecord, EmployeeStats, User } from '../../../database/schema.ts';
-import { Loader2Icon, RefreshCwIcon, DownloadIcon, UsersIcon, CalendarIcon, SendIcon, XIcon, CheckCircleIcon, AlertTriangleIcon, SlidersHorizontalIcon, HistoryIcon } from '../../Icons.tsx';
+import { Loader2Icon, RefreshCwIcon, DownloadIcon, UsersIcon, CalendarIcon, SendIcon, XIcon, CheckCircleIcon, AlertTriangleIcon, SlidersHorizontalIcon, HistoryIcon, BarChartIcon } from '../../Icons.tsx';
 import { useAttendanceStats } from './useAttendanceStats.ts';
 import { useAttendanceRuleSync } from '../../../hooks/useAttendanceRuleSync.ts';
 import { AttendanceRuleManager } from '../AttendanceRuleEngine.ts';
@@ -11,15 +12,16 @@ import { AttendanceCalendarView } from './AttendanceCalendar.tsx';
 import { EmployeeTableView } from './AttendanceEmployeeList.tsx';
 import { EmployeeDetailModal, PunchDetailModal, EmployeeAttendanceAnalysisModal } from './AttendanceModals.tsx';
 import { AttendanceEditLogs } from './AttendanceEditLogs.tsx';
-import { fetchCompanyData, fetchProcessDetail, SmartCache, HolidayCache, DashboardCache, getLateMinutes, calculateDailyLeaveDuration, checkTimeInLeaveRange } from '../utils.ts';
+import { fetchCompanyData, fetchProcessDetail, SmartCache, HolidayCache, DashboardCache, getLateMinutes, calculateDailyLeaveDuration, checkTimeInLeaveRange, DEFAULT_CONFIGS } from '../utils.ts';
 import { sendDingTalkMessage, validateDingTalkWebhook, type AtUser } from '../../../services/pushApiService.ts';
 import type { AttendanceDashboardState } from '../../../App.tsx';
 import { db } from '../../../database/mockDb.ts';
 import JSZip from 'jszip';
 import saveAs from 'file-saver';
+import { saveReportSnapshot, getLatestSnapshot, getSnapshots, getSnapshotById, getEditLogs } from '../../../services/reportSnapshotApiService.ts';
 
 interface AttendanceDashboardPageProps {
-  onNavigateToConfirmation: (data: EmployeeAttendanceRecord[], month: string, mainCompany: string) => void;
+  onNavigateToConfirmation: (data: EmployeeAttendanceRecord[], month: string, mainCompany: string, source?: 'dashboard' | 'calendar', holidays?: Record<string, { holiday: boolean; name?: string }>) => void;
   initialState: AttendanceDashboardState;
   onStateChange: (state: AttendanceDashboardState) => void;
   currentCompany: string; // New Prop
@@ -57,6 +59,14 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     return localStorage.getItem('attendance_push_webhook') || DEFAULT_WEBHOOK;
   });
   const [isWebhookEditable, setIsWebhookEditable] = useState(false);
+
+  // 🔥 操作日志状态
+  const [showSnapshotLogsModal, setShowSnapshotLogsModal] = useState(false);
+  const [snapshotLogs, setSnapshotLogs] = useState<any[]>([]);
+  const [isLoadingSnapshotLogs, setIsLoadingSnapshotLogs] = useState(false);
+  const [snapshotDetail, setSnapshotDetail] = useState<any>(null);
+  const [isLoadingSnapshotDetail, setIsLoadingSnapshotDetail] = useState(false);
+  const [snapshotDetailEditLogs, setSnapshotDetailEditLogs] = useState<any[]>([]);
   const [showWebhookConfirmModal, setShowWebhookConfirmModal] = useState(false);
   const [pushContent, setPushContent] = useState('');
   const [isPushing, setIsPushing] = useState(false);
@@ -82,8 +92,59 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   const [previewFileName, setPreviewFileName] = useState<string>('');
   const [previewDownloadCallback, setPreviewDownloadCallback] = useState<(() => void) | null>(null);
   
+  // 🔥 编辑功能状态
+  const [editedData, setEditedData] = useState<Map<string, string>>(new Map());
+  const [editedCells, setEditedCells] = useState<Set<string>>(new Set());
+  
+  // 🔥 使用 ref 存储最新的编辑数据和当前tab，避免闭包问题
+  const editedDataRef = useRef<Map<string, string>>(new Map());
+  const editedCellsRef = useRef<Set<string>>(new Set());
+  const activePreviewTabRef = useRef<number>(0);
+  const previewTabsRef = useRef<Array<{ name: string; headers: string[]; rows: string[][] }>>([]);
+  
+  // 🔥 同步 state 到 ref
+  useEffect(() => {
+    editedDataRef.current = editedData;
+    editedCellsRef.current = editedCells;
+  }, [editedData, editedCells]);
+  
+  useEffect(() => {
+    activePreviewTabRef.current = activePreviewTab;
+  }, [activePreviewTab]);
+  
+  useEffect(() => {
+    previewTabsRef.current = previewTabs;
+  }, [previewTabs]);
+  
+  // 🔥 弹窗打开时加载当前 tab 的最新快照信息
+  useEffect(() => {
+    if (showPreviewModal && previewTabs.length > 0) {
+      loadCurrentTabSnapshotInfo(activePreviewTab);
+    }
+    if (!showPreviewModal) {
+      setCurrentSnapshotInfo(null);
+    }
+  }, [showPreviewModal, previewTabs.length]);
+  
   // 编辑日志弹窗状态
   const [showEditLogsModal, setShowEditLogsModal] = useState(false);
+  
+  // 进阶数据分析面板状态（提升到页面级，供 header 按钮控制）
+  const [analyticsPanelOpen, setAnalyticsPanelOpen] = useState(false);
+  
+  // 🔥 报表保存状态
+  const [isSavingSnapshot, setIsSavingSnapshot] = useState(false);
+  const [snapshotRemarks, setSnapshotRemarks] = useState('');
+  
+  // 🔥 快照历史查看状态
+  const [showSnapshotHistory, setShowSnapshotHistory] = useState(false);
+  const [snapshotHistoryList, setSnapshotHistoryList] = useState<any[]>([]);
+  const [snapshotHistoryLoading, setSnapshotHistoryLoading] = useState(false);
+  const [selectedSnapshotLogs, setSelectedSnapshotLogs] = useState<any[] | null>(null);
+  const [selectedSnapshotDetail, setSelectedSnapshotDetail] = useState<any | null>(null);
+  
+  // 🔥 当前 tab 最新快照版本信息
+  const [currentSnapshotInfo, setCurrentSnapshotInfo] = useState<{ version: number; savedAt: string; savedByName: string } | null>(null);
   
   // 字段搜索状态
   const [columnSearchQuery, setColumnSearchQuery] = useState('');
@@ -536,6 +597,22 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
   useEffect(() => { 
     if (ruleConfigLoaded && loadAllDataRef.current) {
       // console.log('[AttendanceDashboardPage] 规则配置已加载，开始加载数据');
+      
+      // 🔥 调试：打印海多多的迟到规则配置
+      if (currentCompany === 'hydodo') {
+        const hydodoEngine = AttendanceRuleManager.getEngine('hydodo');
+        const rules = hydodoEngine.getRules();
+        console.log('=== 海多多迟到规则配置 ===');
+        console.log('上班时间:', rules.workStartTime);
+        console.log('迟到规则:', rules.lateRules);
+        console.log('豁免功能:', rules.lateExemptionEnabled);
+        console.log('豁免次数:', rules.lateExemptionCount);
+        console.log('豁免时长:', rules.lateExemptionMinutes);
+        console.log('绩效扣款模式:', rules.performancePenaltyMode);
+        console.log('上不封顶-固定金额:', rules.unlimitedPenaltyFixedAmount);
+        console.log('========================');
+      }
+      
       loadAllDataRef.current(); 
     }
   }, [ruleConfigLoaded, globalMonth, currentCompany]); // 🔥 添加globalMonth和currentCompany依赖，确保切换时重新加载数据
@@ -614,8 +691,29 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
               const isToday = isCurrentMonthSelected && day === currentDay;
 
               if (records.length > 0) {
-                if (onDutyRecords.length > 0 && offDutyRecords.length > 0) {
+                // 🔥 修复：过滤掉 NotSigned 记录后再判断是否有有效的上下班打卡
+                const validOnDuty = onDutyRecords.filter(r => r.timeResult !== 'NotSigned');
+                const validOffDuty = offDutyRecords.filter(r => r.timeResult !== 'NotSigned');
+                
+                if (validOnDuty.length > 0 && validOffDuty.length > 0) {
                   status = hasAbnormality ? 'abnormal' : 'normal';
+                } else if (onDutyRecords.length > 0 && offDutyRecords.length > 0 && validOnDuty.length > 0) {
+                  // 有有效上班打卡但下班全是 NotSigned
+                  if (isToday) {
+                    status = 'normal';
+                  } else {
+                    status = 'incomplete';
+                  }
+                } else if (onDutyRecords.length > 0 && offDutyRecords.length > 0 && validOffDuty.length > 0) {
+                  // 有有效下班打卡但上班全是 NotSigned
+                  status = 'incomplete';
+                } else if (onDutyRecords.length > 0 && offDutyRecords.length > 0) {
+                  // 上下班都有记录（可能都是 NotSigned 或混合）
+                  if (validOnDuty.length > 0 || validOffDuty.length > 0) {
+                    status = 'incomplete';
+                  } else {
+                    status = 'incomplete'; // 都是 NotSigned
+                  }
                 } else {
                   if (isToday && onDutyRecords.length > 0 && offDutyRecords.length === 0) {
                     status = 'normal';
@@ -653,6 +751,13 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       try {
         // 🔥 使用新的节假日缓存系统
         const holidayData = await HolidayCache.getHolidays(year);
+        console.log('[AttendanceDashboardPage] 加载节假日数据:', year, holidayData);
+        console.log('[AttendanceDashboardPage] 节假日数据示例:', {
+          '2026-02-01': holidayData['2026-02-01'],
+          '2026-02-14': holidayData['2026-02-14'],
+          '2026-02-15': holidayData['2026-02-15'],
+          '2026-02-28': holidayData['2026-02-28']
+        });
         setHolidays(holidayData);
       } catch (error) { 
         console.warn('Failed to fetch holidays', error); 
@@ -869,6 +974,85 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     };
   }, [companyEmployeeStats, companyAggregate, allUsers, attendanceMap]);
 
+  // 🔥 数据同步：当统计数据计算完成后，自动同步到数据库
+  const syncTriggeredRef = useRef<string>('');
+  useEffect(() => {
+    if (!companyEmployeeStats || Object.keys(companyEmployeeStats).length === 0) return;
+    if (!allUsers || allUsers.length === 0) return;
+
+    const syncKey = `${currentCompany}_${globalMonth}`;
+    if (syncTriggeredRef.current === syncKey) return; // 避免重复触发
+    syncTriggeredRef.current = syncKey;
+
+    // 异步同步统计数据到数据库
+    const syncStatsToDb = async () => {
+      try {
+        const companyId = (currentCompany?.includes('海多多') || currentCompany === 'hydodo') ? 'hydodo' : 'eyewind';
+        const [y, m] = globalMonth.split('-');
+        const yearMonth = `${y}-${m}`;
+
+        // 构建 statsData
+        const statsData: Array<{ userId: string; userName?: string; department?: string; stats: any }> = [];
+        const employeeCounts: Record<string, number> = {};
+        const fullAttendanceCounts: Record<string, number> = {};
+
+        for (const [companyName, employees] of Object.entries(companyEmployeeStats)) {
+          const empList = employees as Array<{ user: DingTalkUser; stats: EmployeeStats }>;
+          employeeCounts[companyName] = empList.length;
+          fullAttendanceCounts[companyName] = empList.filter(e => e.stats.isFullAttendance).length;
+          for (const { user, stats } of empList) {
+            statsData.push({
+              userId: user.userid,
+              userName: user.name,
+              department: user.department,
+              stats,
+            });
+          }
+        }
+
+        // 同步统计数据
+        await fetch(`http://localhost:5001/api/v1/sync/stats/${companyId}/${yearMonth}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            statsData,
+            companyAggregates: companyAggregate,
+            employeeCounts,
+            fullAttendanceCounts,
+          }),
+        });
+
+        // 判断是否为历史月份，如果是则定稿
+        const now = new Date();
+        const isCurrentMonth = parseInt(y) === now.getFullYear() && parseInt(m) === (now.getMonth() + 1);
+        if (!isCurrentMonth) {
+          const employeeUserIds = allUsers.map(u => u.userid);
+          const totalEmployees = allUsers.length;
+          const fullAttendanceCount = statsData.filter(s => s.stats.isFullAttendance).length;
+          const abnormalUserCount = Object.values(companyAggregate || {}).reduce((sum: number, a: any) => sum + (a.abnormalUserCount || 0), 0);
+
+          await fetch(`http://localhost:5001/api/v1/sync/finalize/${companyId}/${yearMonth}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              employeeUserIds,
+              summaryStats: { totalEmployees, fullAttendanceCount, abnormalUserCount },
+            }),
+          });
+          console.log(`[DataSync] 历史月份 ${yearMonth} 已定稿`);
+        }
+
+        console.log(`[DataSync] 统计数据已同步: ${yearMonth}, ${statsData.length} 条`);
+      } catch (err) {
+        console.warn('[DataSync] 同步统计数据失败:', err);
+      }
+    };
+
+    // 延迟执行，确保统计数据稳定
+    const timer = setTimeout(syncStatsToDb, 3000);
+    return () => clearTimeout(timer);
+  }, [companyEmployeeStats, companyAggregate, allUsers, globalMonth, currentCompany]);
+
   const companyUsers = useMemo(() => {
     if (view.type === 'employeeList') {
       if (view.companyName === '全部') {
@@ -922,14 +1106,121 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             return;
         }
         
-        // 预览模式不支持全部公司
         if (isPreview) {
-            alert('预览模式不支持下载全部公司，请选择单个公司');
+            // 🔥 预览模式：收集所有公司的tabs数据，合并后一次性设置
+            const allTabs: Array<{ name: string; headers: string[]; rows: string[][] }> = [];
+            const allContentsMap: Array<{ companyPrefix: string; companyDisplayName: string; originalContents: { attendance: string; late: string; performance: string }; monthStr: string; tabStartIndex: number }> = [];
+            
+            for (const company of allCompanies) {
+                // 🔥 跳过未知公司
+                if (company === 'Unknown' || company === 'unknown' || company === '未知') continue;
+                const result = await downloadSingleCompanyReport(company, true, true);
+                if (result) {
+                    const tabStartIndex = allTabs.length;
+                    // 给每个tab名称加上公司前缀以区分
+                    result.tabs.forEach(tab => {
+                        allTabs.push({ ...tab, name: `${result.companyDisplayName}-${tab.name}` });
+                    });
+                    allContentsMap.push({
+                        companyPrefix: result.companyPrefix,
+                        companyDisplayName: result.companyDisplayName,
+                        originalContents: result.originalContents,
+                        monthStr: result.monthStr,
+                        tabStartIndex
+                    });
+                }
+            }
+            
+            if (allTabs.length === 0) {
+                alert('暂无公司数据可预览');
+                return;
+            }
+            
+            const firstMonthStr = allContentsMap[0].monthStr;
+            setPreviewFileName(`全部公司-${globalMonth}-考勤表.csv`);
+            setPreviewTabs(allTabs);
+            setActivePreviewTab(0);
+            
+            // 🔥 设置下载回调，支持多公司
+            setPreviewDownloadCallback(() => () => {
+                try {
+                    const currentEditedData = editedDataRef.current;
+                    const currentTab = activePreviewTabRef.current;
+                    const currentPreviewTabs = previewTabsRef.current;
+                    
+                    const currentTabData = currentPreviewTabs[currentTab];
+                    if (!currentTabData) {
+                        alert('无法找到当前表格数据');
+                        return;
+                    }
+                    
+                    // 🔥 找到当前tab属于哪个公司
+                    let matchedCompany = allContentsMap[0];
+                    for (const cm of allContentsMap) {
+                        if (currentTab >= cm.tabStartIndex && currentTab < cm.tabStartIndex + 3) {
+                            matchedCompany = cm;
+                            break;
+                        }
+                    }
+                    
+                    const localTabIndex = currentTab - matchedCompany.tabStartIndex;
+                    
+                    // 应用编辑后的数据
+                    const editedRows = currentTabData.rows.map((row, rowIdx) => {
+                        return row.map((cell, cellIdx) => {
+                            const cellKey = `${currentTab}-${rowIdx}-${cellIdx}`;
+                            const editedValue = currentEditedData.get(cellKey);
+                            return editedValue !== undefined ? editedValue : cell;
+                        });
+                    });
+                    
+                    let originalContent = '';
+                    if (localTabIndex === 0) {
+                        originalContent = matchedCompany.originalContents.attendance;
+                    } else if (localTabIndex === 1) {
+                        originalContent = matchedCompany.originalContents.late;
+                    } else if (localTabIndex === 2) {
+                        originalContent = matchedCompany.originalContents.performance;
+                    }
+                    
+                    const originalLines = originalContent.split('\n');
+                    const headerOffset = localTabIndex === 0 ? 4 : (localTabIndex === 1 ? 4 : 2);
+                    const headerLines = originalLines.slice(0, headerOffset);
+                    
+                    const csvRows = editedRows.map(row => 
+                        row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')
+                    );
+                    
+                    const csvContent = '\ufeff' + [
+                        ...headerLines,
+                        ...csvRows
+                    ].join('\n');
+                    
+                    let fileName = '';
+                    if (localTabIndex === 0) {
+                        fileName = `${matchedCompany.companyDisplayName}-${globalMonth}-考勤表.csv`;
+                    } else if (localTabIndex === 1) {
+                        fileName = `${matchedCompany.companyDisplayName}-${globalMonth}-迟到统计表.csv`;
+                    } else if (localTabIndex === 2) {
+                        fileName = `${matchedCompany.companyDisplayName}-${globalMonth}-考勤绩效统计.csv`;
+                    }
+                    
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    saveAs(blob, fileName);
+                } catch (error) {
+                    console.error("[下载] 下载失败:", error);
+                    alert("下载失败，请重试: " + error);
+                }
+            });
+            
+            setShowPreviewModal(true);
             return;
         }
         
         // 为每个公司生成报表并打包
         for (const company of allCompanies) {
+            // 🔥 跳过未知公司
+            if (company === 'Unknown' || company === 'unknown' || company === '未知') continue;
             await downloadSingleCompanyReport(company, false);
         }
         return;
@@ -938,7 +1229,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     await downloadSingleCompanyReport(companyName, isPreview);
   };
   
-  const downloadSingleCompanyReport = async (companyName: string, isPreview = false) => {
+  const downloadSingleCompanyReport = async (companyName: string, isPreview = false, collectOnly = false): Promise<{ tabs: Array<{ name: string; headers: string[]; rows: string[][] }>; companyPrefix: string; companyDisplayName: string; originalContents: { attendance: string; late: string; performance: string }; monthStr: string } | void> => {
     const employees = companyEmployeeStats[companyName] || [];
     if (employees.length === 0) { 
         if (companyName !== '全部') {
@@ -953,14 +1244,16 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     const downloadRuleConfig = (downloadRuleEngine as any).rules; // 访问内部配置
     
     const benefitHolidayMap = new Map<string, string>(); // 日期 -> 原因的映射
+    const customDayMap = new Map<string, { type: string; reason: string }>(); // 🔥 所有自定义日期调整
     const customDays = downloadRuleConfig?.workdaySwapRules?.customDays || [];
     
     customDays.forEach((day: any) => {
+      customDayMap.set(day.date, { type: day.type, reason: day.reason });
       if (day.type === 'holiday' && day.reason?.includes('福利假')) {
         benefitHolidayMap.set(day.date, day.reason);
       }
     });
-    console.log({ benefitHolidayMap, customDays,  })
+    console.log({ benefitHolidayMap, customDays, customDayMap })
 
     // Log Audit Event
     // if (currentUserInfo) {
@@ -977,6 +1270,9 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     const zip = new JSZip();
     const monthStr = globalMonth.slice(5, 7);
     const fullMonthStr = `${year}年${parseInt(monthStr)}月`;
+    
+    // 🔥 获取规则配置
+    const ruleConfig = downloadRuleConfig || DEFAULT_CONFIGS[companyName === 'hydodo' ? 'hydodo' : 'eyewind'].rules!;
     
     // 🔧 修复公司名称映射逻辑
     let companyDisplayName = '';
@@ -1017,10 +1313,18 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                         
                         let remarkEntry = '';
                         
+                        // 🔥 海多多特殊处理：所有假期统一显示为 09:00-19:00，8.5小时
+                        const isHydodo = currentCompany === 'hydodo' || currentCompany === '海多多';
+                        
                         // 计算小时数
                         let hours = duration;
                         if (unit.includes('day') || unit.includes('天')) {
-                            hours = duration * 8; // 1天 = 8小时
+                            hours = isHydodo ? duration * 8.5 : duration * 8; // 海多多：1天 = 8.5小时，其他：1天 = 8小时
+                        }
+                        
+                        // 🔥 海多多：强制使用固定时间
+                        if (isHydodo) {
+                            hours = 8.5; // 固定为8.5小时
                         }
                         
                         if (start && end) {
@@ -1029,8 +1333,9 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                             
                             if (startDate === endDate) {
                                 // 同一天内的请假
-                                const startTime = start.includes(' ') ? start.split(' ')[1].substring(0, 5) : '09:00';
-                                const endTime = end.includes(' ') ? end.split(' ')[1].substring(0, 5) : '18:30';
+                                // 🔥 海多多：强制使用 09:00-19:00
+                                const startTime = isHydodo ? '09:00' : (start.includes(' ') ? start.split(' ')[1].substring(0, 5) : '09:00');
+                                const endTime = isHydodo ? '19:00' : (end.includes(' ') ? end.split(' ')[1].substring(0, 5) : '18:30');
                                 remarkEntry = `${type} ${startDate} ${startTime} 至 ${endTime} 共${hours}小时`;
                             } else {
                                 // 跨天请假，显示开始日期到结束日期
@@ -1042,7 +1347,12 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                                 if (duration === 1) {
                                     // 1天假期，只显示日期
                                     const dateStr = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
-                                    remarkEntry = `${type} ${dateStr} 共${hours}小时`;
+                                    // 🔥 海多多：添加时间范围
+                                    if (isHydodo) {
+                                        remarkEntry = `${type} ${dateStr} 09:00 至 19:00 共${hours}小时`;
+                                    } else {
+                                        remarkEntry = `${type} ${dateStr} 共${hours}小时`;
+                                    }
                                 } else {
                                     // 多天假期，显示日期范围
                                     const startDate = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
@@ -1053,7 +1363,12 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                             } else {
                                 // 按小时请假
                                 const dateStr = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
-                                remarkEntry = `${type} ${dateStr} 共${hours}小时`;
+                                // 🔥 海多多：添加时间范围
+                                if (isHydodo) {
+                                    remarkEntry = `${type} ${dateStr} 09:00 至 19:00 共${hours}小时`;
+                                } else {
+                                    remarkEntry = `${type} ${dateStr} 共${hours}小时`;
+                                }
                             }
                         }
                         
@@ -1064,10 +1379,16 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
             // 检查周末加班
             const dateKey = `${monthStr}-${String(d).padStart(2, '0')}`;
+            const fullDateKeyForRemarks = `${year}-${monthStr}-${String(d).padStart(2, '0')}`;
             const holidayInfo = holidays[dateKey];
+            const customDayForRemarks = customDayMap.get(fullDateKeyForRemarks);
             const dateObj = new Date(year, monthIndex, d);
             const dayOfWeek = dateObj.getDay();
-            if ([0, 6].includes(dayOfWeek) && (!holidayInfo || holidayInfo.holiday !== false)) {
+            // 🔥 判断是否为非工作日：考虑 customDays
+            const isNonWorkday = customDayForRemarks 
+                ? customDayForRemarks.type === 'holiday'
+                : ([0, 6].includes(dayOfWeek) && (!holidayInfo || holidayInfo.holiday !== false));
+            if (isNonWorkday) {
                 const onTime = daily.records.find((r: any) => r.checkType === 'OnDuty')?.userCheckTime;
                 const offTime = daily.records.find((r: any) => r.checkType === 'OffDuty')?.userCheckTime;
                 if (onTime && offTime) {
@@ -1095,11 +1416,14 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     const daysInMonth = new Date(year, parseInt(monthStr), 0).getDate();
     const dayHeaders = Array.from({ length: daysInMonth }, (_, i) => (i + 1).toString());
 
+    // 🔥 根据豁免功能配置决定显示哪一列
+    const lateMinutesColumn = ruleConfig.lateExemptionEnabled ? '豁免后迟到分钟数' : '迟到分钟数';
+
     // 1. 考勤表 (按照模板格式)
     const attendanceContent = [
         `${companyDisplayName}考勤表,${','.repeat(daysInMonth + 10)}`,
         `${fullMonthStr},${','.repeat(daysInMonth + 5)}本月记薪日 ${employees.filter(e => e.stats.actualAttendanceDays > 0).length}天,${','.repeat(4)}`,
-        `序号,姓名,${dayHeaders.join(',')},正常出勤天数,是否全勤,豁免后迟到分钟数,迟到分钟数,备注,年假(小时),事假(小时),病假(小时 <24),病假(小时 >24),调休(小时),产假(小时),陪产假(小时),婚假(小时),丧假(小时)`,
+        `序号,姓名,${dayHeaders.join(',')},正常出勤天数,是否全勤,${lateMinutesColumn},备注,年假(小时),事假(小时),病假(小时 <24),病假(小时 >24),调休(小时),产假(小时),陪产假(小时),婚假(小时),丧假(小时)`,
         `,,${Array.from({ length: daysInMonth }, (_, i) => {
             const day = i + 1;
             
@@ -1129,11 +1453,25 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                     return benefitHolidayReason;
                 }
                 
+                // 🔥 检查自定义日期调整（customDays 优先于 holidays）
+                const customDay = customDayMap.get(fullDateKey);
+                
                 // 检查是否为法定节假日
                 const holidayInfo = holidays[dateKey];
                 const isWeekend = targetDate.getDay() === 0 || targetDate.getDay() === 6;
                 let isWorkday = !isWeekend;
-                if (holidayInfo) {
+                
+                // 🔥 优先级：customDays > holidays > 默认周末判断
+                if (customDay) {
+                    isWorkday = customDay.type === 'workday';
+                    if (!isWorkday) {
+                        const userAttendance = attendanceMap[user.userid];
+                        const statusData = userAttendance?.[day];
+                        if (!statusData || !statusData.records || statusData.records.length === 0) {
+                            return customDay.reason || '-';
+                        }
+                    }
+                } else if (holidayInfo) {
                     if (holidayInfo.holiday === false) {
                         isWorkday = true; // 补班日
                     } else if (holidayInfo.holiday === true) {
@@ -1178,7 +1516,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 const hasOffDuty = statusData.records.some(r => r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned');
                 
                 if (!hasOnDuty && !hasOffDuty) {
-                    return '缺卡';
+                    return '旷工';
                 } else if (!hasOnDuty) {
                     return '缺卡-上班卡';
                 } else if (!hasOffDuty && day !== currentDate.getDate()) {
@@ -1186,11 +1524,20 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 }
                 
                 // 正常出勤
+                // 🔥 检查是否为法定补班日
+                if (customDay && customDay.type === 'workday') {
+                    return customDay.reason || '法定补班';
+                }
                 return '√';
             });
             
             // 🔧 使用统一的备注生成函数，与考勤确认单保持一致
             const remarks = generateEmployeeRemarks(user, stats);
+            
+            // 🔥 根据豁免功能配置决定显示哪个迟到分钟数
+            const lateMinutesValue = ruleConfig.lateExemptionEnabled 
+                ? (stats.exemptedLateMinutes || 0)
+                : (stats.lateMinutes || 0);
             
             return [
                 index + 1,
@@ -1198,8 +1545,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 ...dailyStatus,
                 stats.actualAttendanceDays || 0,
                 stats.isFullAttendance ? '是' : '否',
-                stats.exemptedLateMinutes || 0,
-                stats.lateMinutes || 0,
+                lateMinutesValue,
                 remarks.length > 0 ? remarks.join('\n') : '-', // 使用统一的备注格式
                 stats.annualHours || 0,
                 stats.personalHours || 0,
@@ -1214,13 +1560,13 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         })
     ].join('\n');
     
-    zip.file(`${parseInt(monthStr)}月考勤表.csv`, createCSV(attendanceContent));
+    zip.file(`${companyDisplayName}-${globalMonth}-考勤表.csv`, createCSV(attendanceContent));
 
     // 2. 迟到统计表 (按照模板格式)
     const lateContent = [
         `${companyDisplayName}迟到统计表,${','.repeat(daysInMonth + 15)}`,
         `${fullMonthStr},${','.repeat(daysInMonth + 15)}`,
-        `序号,姓名,${dayHeaders.join(',')},豁免后迟到分钟数,豁免后迟到次数,迟到总分总数,迟到次数,加班到19:30累计时长,加班到20:30累计时长,加班到22:00累计时长,加班到24:00累计时长,加班总时长(19:30前不算),加班19:30次数,加班20:30次数,加班22:00次数,加班24:00次数,上午缺卡次数,下午缺卡次数`,
+        `序号,姓名,${dayHeaders.join(',')},${lateMinutesColumn},${ruleConfig.lateExemptionEnabled ? '豁免后迟到次数,' : ''}迟到总分钟数,迟到次数,加班到19:30累计时长,加班到20:30累计时长,加班到22:00累计时长,加班到24:00累计时长,加班总时长(19:30前不算),加班19:30次数,加班20:30次数,加班22:00次数,加班24:00次数,上午缺卡次数,下午缺卡次数`,
         `,,${Array.from({ length: daysInMonth }, (_, i) => {
             const day = i + 1;
             
@@ -1250,11 +1596,25 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                     return benefitHolidayReason;
                 }
                 
+                // 🔥 检查自定义日期调整（customDays 优先于 holidays）
+                const customDay = customDayMap.get(fullDateKey);
+                
                 // 检查是否为法定节假日
                 const holidayInfo = holidays[dateKey];
                 const isWeekend = targetDate.getDay() === 0 || targetDate.getDay() === 6;
                 let isWorkday = !isWeekend;
-                if (holidayInfo) {
+                
+                // 🔥 优先级：customDays > holidays > 默认周末判断
+                if (customDay) {
+                    isWorkday = customDay.type === 'workday';
+                    if (!isWorkday) {
+                        const userAttendance = attendanceMap[user.userid];
+                        const statusData = userAttendance?.[day];
+                        if (!statusData || !statusData.records || statusData.records.length === 0) {
+                            return customDay.reason || '-';
+                        }
+                    }
+                } else if (holidayInfo) {
                     if (holidayInfo.holiday === false) {
                         isWorkday = true; // 补班日
                     } else if (holidayInfo.holiday === true) {
@@ -1360,12 +1720,17 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 return '√';
             });
             
+            // 🔥 根据豁免功能配置决定显示哪个迟到分钟数
+            const lateMinutesValue = ruleConfig.lateExemptionEnabled 
+                ? (stats.exemptedLateMinutes || 0)
+                : (stats.lateMinutes || 0);
+            
             return [
                 index + 1,
                 user.name,
                 ...dailyLateStatus,
-                stats.exemptedLateMinutes || 0,
-                stats.late || 0,
+                lateMinutesValue,
+                ...(ruleConfig.lateExemptionEnabled ? [stats.late || 0] : []), // 只在启用豁免时显示豁免后迟到次数
                 stats.lateMinutes || 0,
                 stats.late || 0,
                 stats.overtime19_5Minutes || 0,
@@ -1383,7 +1748,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         })
     ].join('\n');
     
-    zip.file(`${parseInt(monthStr)}月迟到统计表.csv`, createCSV(lateContent));
+    zip.file(`${companyDisplayName}-${globalMonth}-迟到统计表.csv`, createCSV(lateContent));
 
     // 3. 考勤绩效统计表 (按照模板格式)
     const fullAttendanceEmployees = employees.filter(emp => emp.stats.isFullAttendance);
@@ -1430,7 +1795,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         `合计,,,,,-${lateEmployees.reduce((sum, emp) => sum + (emp.stats.performancePenalty || 0), 0)},${','.repeat(25)}`
     ].join('\n');
     
-    zip.file(`${parseInt(monthStr)}月考勤绩效统计.csv`, createCSV(performanceContent));
+    zip.file(`${companyDisplayName}-${globalMonth}-考勤绩效统计.csv`, createCSV(performanceContent));
 
     // 🔥 预览模式：解析三个CSV文件并显示预览
     if (isPreview) {
@@ -1478,7 +1843,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         // 解析考勤表
         const attendanceLines = cleanedAttendance.split('\n');
         const attendanceHeaders = attendanceLines[2].split(',').map(h => h.replace(/^"|"$/g, ''));
-        const attendanceRows = attendanceLines.slice(4, Math.min(54, attendanceLines.length))
+        const attendanceRows = attendanceLines.slice(4) // 🔥 移除50行限制，显示全部数据
             .filter(line => line.trim())
             .map(line => {
                 const cells: string[] = [];
@@ -1511,7 +1876,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         // 解析迟到统计表
         const lateLines = cleanedLate.split('\n');
         const lateHeaders = lateLines[2].split(',').map(h => h.replace(/^"|"$/g, ''));
-        const lateRows = lateLines.slice(4, Math.min(54, lateLines.length))
+        const lateRows = lateLines.slice(4) // 🔥 移除50行限制，显示全部数据
             .filter(line => line.trim())
             .map(line => {
                 const cells: string[] = [];
@@ -1542,7 +1907,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         // 解析考勤绩效统计表
         const performanceLines = cleanedPerformance.split('\n');
         const performanceHeaders = performanceLines[1].split(',').map(h => h.replace(/^"|"$/g, ''));
-        const performanceRows = performanceLines.slice(2, Math.min(52, performanceLines.length))
+        const performanceRows = performanceLines.slice(2) // 🔥 移除50行限制，显示全部数据
             .filter(line => line.trim())
             .map(line => {
                 const cells: string[] = [];
@@ -1571,18 +1936,121 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         tabs.push({ name: '考勤绩效统计', headers: performanceHeaders, rows: performanceRows });
         
         const companyPrefix = companyName === 'eyewind' ? '风眼' : companyName === 'hydodo' ? '海多多' : companyName;
-        setPreviewFileName(`${companyPrefix}_${parseInt(monthStr)}月考勤报表.zip`);
+        
+        // 🔥 保存原始内容到变量，供下载时使用
+        const originalContents = {
+          attendance: attendanceContent,
+          late: lateContent,
+          performance: performanceContent
+        };
+        
+        // 🔥 collectOnly模式：返回数据而不设置state（用于"全部"预览）
+        if (collectOnly) {
+            return { tabs, companyPrefix, companyDisplayName, originalContents, monthStr };
+        }
+        
+        setPreviewFileName(`${companyDisplayName}-${globalMonth}-考勤表.csv`); // 🔥 初始显示考勤表的文件名
         setPreviewTabs(tabs);
         setActivePreviewTab(0);
         
-        // 保存下载回调
-        setPreviewDownloadCallback(() => async () => {
+        // 保存下载回调 - 🔥 使用 ref 获取最新的编辑数据和当前tab
+        setPreviewDownloadCallback(() => () => {
             try {
-                const content = await zip.generateAsync({ type: "blob" });
-                saveAs(content, `${companyPrefix}_${parseInt(monthStr)}月考勤报表.zip`);
+                console.log('[下载] 开始下载');
+                
+                // 🔥 从 ref 获取最新的编辑数据和当前tab
+                const currentEditedData = editedDataRef.current;
+                const currentEditedCells = editedCellsRef.current;
+                const currentTab = activePreviewTabRef.current;
+                const currentPreviewTabs = previewTabsRef.current;
+                
+                console.log('[下载] 当前编辑数据:', currentEditedData);
+                console.log('[下载] 当前编辑单元格:', currentEditedCells);
+                console.log('[下载] 编辑数据大小:', currentEditedData.size);
+                console.log('[下载] 编辑单元格数量:', currentEditedCells.size);
+                console.log(`[下载] 当前Tab索引: ${currentTab}`);
+                
+                // 🔥 获取当前tab的数据
+                const currentTabData = currentPreviewTabs[currentTab];
+                if (!currentTabData) {
+                    console.error('[下载] 错误：无法找到当前表格数据');
+                    console.error('[下载] currentTab:', currentTab);
+                    console.error('[下载] currentPreviewTabs:', currentPreviewTabs);
+                    alert('无法找到当前表格数据');
+                    return;
+                }
+                
+                console.log(`[下载] 表头: ${currentTabData.headers.length} 列`);
+                console.log(`[下载] 原始数据行: ${currentTabData.rows.length} 行`);
+                
+                // 🔥 应用编辑后的数据
+                const editedRows = currentTabData.rows.map((row, rowIdx) => {
+                    return row.map((cell, cellIdx) => {
+                        const cellKey = `${currentTab}-${rowIdx}-${cellIdx}`;
+                        // 如果有编辑值，使用编辑值；否则使用原始值
+                        const editedValue = currentEditedData.get(cellKey);
+                        const finalValue = editedValue !== undefined ? editedValue : cell;
+                        
+                        // 调试：如果这个单元格被编辑过，打印信息
+                        if (editedValue !== undefined) {
+                            console.log(`[下载] 单元格 [${rowIdx},${cellIdx}] 已编辑: "${cell}" -> "${editedValue}"`);
+                        }
+                        
+                        return finalValue;
+                    });
+                });
+                
+                console.log(`[下载] 应用编辑后的数据行: ${editedRows.length} 行`);
+                
+                // 🔥 根据当前tab获取原始CSV的标题行
+                let originalContent = '';
+                if (currentTab === 0) {
+                    originalContent = originalContents.attendance;
+                } else if (currentTab === 1) {
+                    originalContent = originalContents.late;
+                } else if (currentTab === 2) {
+                    originalContent = originalContents.performance;
+                }
+                
+                const originalLines = originalContent.split('\n');
+                const headerOffset = currentTab === 0 ? 4 : (currentTab === 1 ? 4 : 2);
+                
+                // 保留原始的标题行
+                const headerLines = originalLines.slice(0, headerOffset);
+                
+                console.log(`[下载] 保留标题行: ${headerLines.length} 行`);
+                
+                // 生成CSV内容
+                const csvRows = editedRows.map(row => 
+                    row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')
+                );
+                
+                const csvContent = '\ufeff' + [
+                    ...headerLines,
+                    ...csvRows
+                ].join('\n');
+                
+                // 确定文件名
+                let fileName = '';
+                if (currentTab === 0) {
+                    fileName = `${companyDisplayName}-${globalMonth}-考勤表.csv`;
+                } else if (currentTab === 1) {
+                    fileName = `${companyDisplayName}-${globalMonth}-迟到统计表.csv`;
+                } else if (currentTab === 2) {
+                    fileName = `${companyDisplayName}-${globalMonth}-考勤绩效统计.csv`;
+                }
+                
+                console.log(`[下载] 下载文件: ${fileName}`);
+                console.log(`[下载] CSV内容前200字符:`, csvContent.substring(0, 200));
+                
+                // 下载文件
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                saveAs(blob, fileName);
+                
+                console.log('[下载] 下载完成');
             } catch (error) {
-                console.error("Download failed:", error);
-                alert("打包下载失败，请重试");
+                console.error("[下载] 下载失败:", error);
+                alert("下载失败，请重试: " + error);
             }
         });
         
@@ -1592,8 +2060,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
     try {
         const content = await zip.generateAsync({ type: "blob" });
-        const companyPrefix = companyName === 'eyewind' ? '风眼' : companyName === 'hydodo' ? '海多多' : companyName;
-        saveAs(content, `${companyPrefix}_${parseInt(monthStr)}月考勤报表.zip`);
+        saveAs(content, `${companyDisplayName}-${globalMonth}-考勤报表.zip`);
     } catch (error) {
         console.error("Download failed:", error);
         alert("打包下载失败，请重试");
@@ -1650,7 +2117,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 3. 人事变动部分请关注【钉钉-人员月度变动审批】通过后再结算
 4. ${monthStr}份加班人员都按调休折算
 
-考勤系统检阅可查阅：http://10.10.88.135:3000/；
+考勤系统检阅可查阅：${window.location.origin}/；
 
 如有其他问题可随时沟通。`;
 
@@ -1706,9 +2173,11 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     const downloadRuleConfig = (downloadRuleEngine as any).rules;
     
     const benefitHolidayMap = new Map<string, string>();
+    const customDayMap = new Map<string, { type: string; reason: string }>(); // 🔥 所有自定义日期调整
     const customDays = downloadRuleConfig?.workdaySwapRules?.customDays || [];
     
     customDays.forEach((day: any) => {
+      customDayMap.set(day.date, { type: day.type, reason: day.reason });
       if (day.type === 'holiday' && day.reason?.includes('福利假')) {
         benefitHolidayMap.set(day.date, day.reason);
       }
@@ -1925,6 +2394,13 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 if (benefitHolidayReason) {
                   row.push(benefitHolidayReason);
                 } else {
+                  // 🔥 检查自定义日期调整
+                  const customDay = customDayMap.get(fullDateKey);
+                  const isCustomHoliday = customDay && customDay.type === 'holiday';
+                  
+                  if (isCustomHoliday && (!daily.records || daily.records.length === 0)) {
+                    row.push(customDay.reason || '-');
+                  } else {
                   // 检查是否有请假记录
                   const procRecord = daily.records?.find((r: any) => r.procInstId);
                   let leaveInfo = '';
@@ -1948,15 +2424,28 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                   if (leaveInfo) {
                     row.push(leaveInfo);
                   } else if (daily.status === 'normal') {
-                    row.push('✓'); // 正常出勤显示对号
+                    // 🔥 正常出勤：检查是否为法定补班日
+                    const customDayWork = customDayMap.get(fullDateKey);
+                    if (customDayWork && customDayWork.type === 'workday') {
+                      row.push(customDayWork.reason || '法定补班');
+                    } else {
+                      row.push('✓');
+                    }
                   } else if (daily.status === 'abnormal') {
-                    row.push('异常');
+                    // 🔥 异常出勤：也检查法定补班日
+                    const customDayWork = customDayMap.get(fullDateKey);
+                    if (customDayWork && customDayWork.type === 'workday') {
+                      row.push(customDayWork.reason || '法定补班');
+                    } else {
+                      row.push('异常');
+                    }
                   } else if (daily.status === 'incomplete') {
                     row.push('缺卡');
                   } else if (daily.status === 'noRecord') {
                     row.push('-');
                   } else {
                     row.push('-');
+                  }
                   }
                 }
               }
@@ -1999,28 +2488,36 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
       // 🔥 预览模式：显示预览弹窗
       if (isPreview) {
-        const fileName = `${companyDisplayName}_${globalMonth}_自定义报表.csv`;
+        const fileName = `${companyDisplayName}-${globalMonth}-自定义报表.csv`;
         setPreviewFileName(fileName);
         setPreviewTabs([{ 
           name: '自定义报表',
           headers, 
-          rows: rows.slice(0, 50).map(row => row.map(val => String(val))) // 只预览前50行，保留换行符
+          rows: rows.map(row => row.map(val => String(val))) // 🔥 显示全部数据，保留换行符
         }]);
         setActivePreviewTab(0);
         
-        // 保存下载回调
+        // 保存下载回调 - 🔥 使用编辑后的数据
         setPreviewDownloadCallback(() => () => {
+          // 🔥 应用编辑后的数据
+          const editedRows = rows.map((row, rowIdx) => {
+            return row.map((cell, colIdx) => {
+              const cellKey = `0-${rowIdx}-${colIdx}`; // 自定义报表只有一个tab，索引为0
+              return editedData.get(cellKey) ?? cell;
+            });
+          });
+          
           // 生成 CSV 内容
           const csvContent = '\ufeff' + [
             headers.map(h => `"${h}"`).join(','),
-            ...rows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+            ...editedRows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
           ].join('\n');
 
           // 下载文件
           const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
           const link = document.createElement('a');
           link.href = URL.createObjectURL(blob);
-          link.download = fileName;
+          link.download = previewFileName || fileName;
           link.click();
           URL.revokeObjectURL(link.href);
         });
@@ -2039,7 +2536,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = `${companyDisplayName}_${globalMonth}_自定义报表.csv`;
+      link.download = `${companyDisplayName}-${globalMonth}-自定义报表.csv`;
       link.click();
       URL.revokeObjectURL(link.href);
     });
@@ -2067,6 +2564,44 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     setPushResult(null);
     setIsWebhookEditable(false); // 重置为锁定状态
     setShowPushModal(true);
+  };
+
+  // 🔥 打开操作日志弹窗
+  const handleViewSnapshotLogs = async () => {
+    setShowSnapshotLogsModal(true);
+    setIsLoadingSnapshotLogs(true);
+    setSnapshotLogs([]);
+    try {
+      const resolveId = (name: string): string => {
+        if (name === 'eyewind' || name.includes('风眼')) return 'eyewind';
+        if (name === 'hydodo' || name.includes('海多多')) return 'hydodo';
+        if (name.includes('脑力')) return 'naoli';
+        if (name.includes('海科')) return 'haike';
+        if (name.includes('浅冰')) return 'qianbing';
+        return name;
+      };
+      // 确定需要查询的公司列表
+      const isAllMode = activeCompany === '全部';
+      const companyIds: string[] = isAllMode
+        ? Object.keys(companyEmployeeStats)
+            .filter(k => k && k !== 'Unknown' && k !== 'unknown' && k !== '未知')
+            .map(k => resolveId(k))
+        : [resolveId(activeCompany)];
+      // 去重
+      const uniqueIds = [...new Set(companyIds)];
+      // 并行查询所有公司的快照记录
+      const allLogs = await Promise.all(
+        uniqueIds.map(cid => getSnapshots(cid, globalMonth).catch(() => []))
+      );
+      const merged = allLogs.flat().sort((a: any, b: any) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      setSnapshotLogs(merged);
+    } catch (err) {
+      console.error('[操作日志] 加载失败:', err);
+    } finally {
+      setIsLoadingSnapshotLogs(false);
+    }
   };
 
   // 发送推送
@@ -2125,12 +2660,218 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     }
   };
 
-  const handleConfirmAttendance = async (targetCompanyName: string) => {
-    const targetStats = Object.values(companyEmployeeStats).flat() || [];
-    if (!targetStats || targetStats.length === 0) { alert('没有数据可用于生成考勤确认单。'); return; }
+  // 🔥 从 tab 名称解析公司ID和报表类型
+  const parseTabInfo = (tabName: string): { companyId: string; reportType: 'attendance' | 'late' | 'performance'; companyDisplayName: string } => {
+    let companyId = currentCompany === 'eyewind' ? 'eyewind' : 'hydodo';
+    let companyDisplayName = currentCompany === 'eyewind' ? '深圳市风眼科技有限公司' : '深圳市海多多科技有限公司';
+    let reportType: 'attendance' | 'late' | 'performance' = 'attendance';
+    
+    const dashIdx = tabName.lastIndexOf('-');
+    if (dashIdx > 0) {
+      const tabCompany = tabName.substring(0, dashIdx);
+      const tabType = tabName.substring(dashIdx + 1);
+      companyDisplayName = tabCompany;
+      // 公司名 → companyId 映射
+      if (tabCompany.includes('风眼')) companyId = 'eyewind';
+      else if (tabCompany.includes('海多多')) companyId = 'hydodo';
+      else if (tabCompany.includes('脑力')) companyId = 'naoli';
+      else if (tabCompany.includes('海科')) companyId = 'haike';
+      else if (tabCompany.includes('浅冰')) companyId = 'qianbing';
+      else companyId = tabCompany; // 兜底：用全称作为 ID
+      // 报表类型
+      if (tabType.includes('迟到')) reportType = 'late';
+      else if (tabType.includes('绩效')) reportType = 'performance';
+    } else {
+      if (tabName.includes('迟到')) reportType = 'late';
+      else if (tabName.includes('绩效')) reportType = 'performance';
+    }
+    
+    return { companyId, reportType, companyDisplayName };
+  };
+
+  // 🔥 加载当前 tab 的最新快照信息
+  const loadCurrentTabSnapshotInfo = async (tabIndex?: number) => {
+    const idx = tabIndex ?? activePreviewTab;
+    const tabData = previewTabs[idx];
+    if (!tabData) { setCurrentSnapshotInfo(null); return; }
+    
+    try {
+      const { companyId, reportType } = parseTabInfo(tabData.name);
+      
+      const snapshot = await getLatestSnapshot(companyId, globalMonth, reportType);
+      if (snapshot) {
+        setCurrentSnapshotInfo({
+          version: snapshot.version,
+          savedAt: snapshot.created_at,
+          savedByName: snapshot.saved_by_name || '未知',
+        });
+        
+        // 🔥 用数据库中的最新快照数据覆盖当前 tab 的 rows
+        const snapshotHeaders: string[] = typeof snapshot.headers === 'string' ? JSON.parse(snapshot.headers) : snapshot.headers;
+        const snapshotRows: string[][] = typeof snapshot.rows === 'string' ? JSON.parse(snapshot.rows) : snapshot.rows;
+        
+        setPreviewTabs(prev => {
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], headers: snapshotHeaders, rows: snapshotRows };
+          return updated;
+        });
+        // 清空该 tab 的编辑状态（快照数据已经是最新的）
+        setEditedData(prev => {
+          const newMap = new Map(prev);
+          for (const key of Array.from(newMap.keys())) {
+            if ((key as string).startsWith(`${idx}-`)) newMap.delete(key);
+          }
+          return newMap;
+        });
+        setEditedCells(prev => {
+          const newSet = new Set(prev);
+          for (const key of Array.from(newSet)) {
+            if ((key as string).startsWith(`${idx}-`)) newSet.delete(key);
+          }
+          return newSet;
+        });
+      } else {
+        setCurrentSnapshotInfo(null);
+      }
+    } catch {
+      setCurrentSnapshotInfo(null);
+    }
+  };
+
+  // 🔥 加载快照历史列表
+  const loadSnapshotHistory = async () => {
+    const tabData = previewTabs[activePreviewTab];
+    if (!tabData) return;
+    
+    setSnapshotHistoryLoading(true);
+    setShowSnapshotHistory(true);
+    try {
+      const { companyId, reportType } = parseTabInfo(tabData.name);
+      const list = await getSnapshots(companyId, globalMonth, reportType);
+      setSnapshotHistoryList(list);
+    } catch (err) {
+      console.error('[加载快照历史] 失败:', err);
+      setSnapshotHistoryList([]);
+    } finally {
+      setSnapshotHistoryLoading(false);
+    }
+  };
+
+  // 🔥 查看某个快照的编辑日志
+  const loadSnapshotEditLogs = async (snapshotId: number) => {
+    try {
+      const logs = await getEditLogs(snapshotId);
+      setSelectedSnapshotLogs(logs);
+    } catch (err) {
+      console.error('[加载编辑日志] 失败:', err);
+      setSelectedSnapshotLogs([]);
+    }
+  };
+
+  // 🔥 保存当前预览tab的报表快照到数据库
+  const handleSaveSnapshot = async (reportType?: 'attendance' | 'late' | 'performance') => {
+    const currentTab = activePreviewTabRef.current;
+    const currentPreviewTabs = previewTabsRef.current;
+    const currentTabData = currentPreviewTabs[currentTab];
+    if (!currentTabData) { alert('无法找到当前表格数据'); return; }
+
+    setIsSavingSnapshot(true);
+    try {
+      // 解析tab名称获取公司信息和报表类型
+      const tabName = currentTabData.name;
+      const parsed = parseTabInfo(tabName);
+      let companyId = parsed.companyId;
+      let companyDisplayName = parsed.companyDisplayName;
+      let detectedReportType = reportType || parsed.reportType;
+
+      // 构建rows（应用编辑后的值）
+      const currentEditedData = editedDataRef.current;
+      const finalRows = currentTabData.rows.map((row, rowIdx) =>
+        row.map((cell, cellIdx) => {
+          const cellKey = `${currentTab}-${rowIdx}-${cellIdx}`;
+          return currentEditedData.get(cellKey) ?? cell;
+        })
+      );
+
+      // 构建编辑日志
+      const editLogs: Array<{ rowIndex: number; colIndex: number; employeeName: string; columnName: string; oldValue: string; newValue: string }> = [];
+      currentEditedData.forEach((newValue, key) => {
+        const parts = key.split('-').map(Number);
+        if (parts[0] !== currentTab) return;
+        const rowIdx = parts[1];
+        const colIdx = parts[2];
+        const oldValue = currentTabData.rows[rowIdx]?.[colIdx] ?? '';
+        if (oldValue === newValue) return;
+        editLogs.push({
+          rowIndex: rowIdx,
+          colIndex: colIdx,
+          employeeName: currentTabData.rows[rowIdx]?.[1] ?? '', // 姓名通常在第2列
+          columnName: currentTabData.headers[colIdx] ?? '',
+          oldValue,
+          newValue,
+        });
+      });
+
+      // 计算红框数
+      let redFrameCount = 0;
+      finalRows.forEach(row => {
+        row.forEach(cell => {
+          if (cell.includes('缺卡') || cell === '旷工') redFrameCount++;
+        });
+      });
+
+      const result = await saveReportSnapshot({
+        companyId,
+        companyDisplayName,
+        yearMonth: globalMonth,
+        reportType: detectedReportType,
+        tabName,
+        headers: currentTabData.headers,
+        rows: finalRows,
+        redFrameCount,
+        editCount: editLogs.length,
+        editLogs,
+        savedBy: currentUserInfo?.id?.toString(),
+        savedByName: currentUserInfo?.name,
+        remarks: snapshotRemarks.trim() || undefined,
+      });
+
+      alert(`保存成功（第 ${result.version} 版）`);
+      setSnapshotRemarks(''); // 清空备注
+      // 🔥 保存成功后：先把编辑后的数据写入 previewTabs，再清空编辑状态
+      setPreviewTabs(prev => {
+        const updated = [...prev];
+        updated[currentTab] = { ...updated[currentTab], rows: finalRows };
+        return updated;
+      });
+      setCurrentSnapshotInfo({
+        version: result.version,
+        savedAt: new Date().toISOString(),
+        savedByName: currentUserInfo?.name || '未知',
+      });
+      setEditedData(new Map());
+      setEditedCells(new Set());
+    } catch (err: any) {
+      console.error('[保存快照] 失败:', err);
+      alert('保存失败: ' + (err.message || '未知错误'));
+    } finally {
+      setIsSavingSnapshot(false);
+    }
+  };
+
+  const handleConfirmAttendance = async (targetCompanyName: string, source: 'dashboard' | 'calendar' = 'dashboard') => {
+    // 🔥 构建带公司名的员工统计列表，保留每个员工所属的公司名
+    const targetStatsWithCompany: Array<{ user: DingTalkUser; stats: EmployeeStats; companyName: string }> = [];
+    for (const [companyName, employees] of Object.entries(companyEmployeeStats) as [string, { user: DingTalkUser; stats: EmployeeStats }[]][]) {
+      if (!companyName || companyName === 'Unknown' || companyName === 'unknown' || companyName === '未知') continue;
+      for (const emp of employees) {
+        targetStatsWithCompany.push({ ...emp, companyName });
+      }
+    }
+    if (targetStatsWithCompany.length === 0) { alert('没有数据可用于生成考勤确认单。'); return; }
+    const targetStats = targetStatsWithCompany;
     
     // 🔥 清除考勤确认相关的缓存，确保每次点击都重新拉取数据
-    // console.log('[AttendanceDashboardPage] 清除考勤确认相关缓存，强制重新加载数据');
     
     // 清除考勤表单缓存
     const cacheKey = `ATTENDANCE_SHEETS_${targetCompanyName}_${globalMonth}`;
@@ -2140,9 +2881,49 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
     // 清除仪表盘缓存，确保数据是最新的
     await DashboardCache.clearDashboardData(targetCompanyName, globalMonth);
     
-    // console.log('[AttendanceDashboardPage] 缓存清除完成，准备导航到考勤确认页面');
+    // 🔥 加载快照数据，用于覆盖考勤确认单的每日状态（快照优先级最高）
+    const resolveConfirmCompanyId = (name: string): string => {
+      if (name === 'eyewind' || name.includes('风眼')) return 'eyewind';
+      if (name === 'hydodo' || name.includes('海多多')) return 'hydodo';
+      if (name.includes('脑力')) return 'naoli';
+      if (name.includes('海科')) return 'haike';
+      if (name.includes('浅冰')) return 'qianbing';
+      return name;
+    };
+    // 确定需要加载快照的公司列表
+    const isAllMode = targetCompanyName === '全部' || targetCompanyName === currentCompany;
+    const snapshotCompanyIds: string[] = isAllMode
+      ? Object.keys(companyEmployeeStats)
+          .filter(k => k && k !== 'Unknown' && k !== 'unknown' && k !== '未知')
+          .map(k => resolveConfirmCompanyId(k))
+      : [resolveConfirmCompanyId(targetCompanyName)];
     
-    const records: EmployeeAttendanceRecord[] = targetStats.map(({ user, stats }) => {
+    // 并行加载所有公司的考勤表快照
+    const snapshotOverrideMap: Record<string, Record<number, string>> = {}; // employeeName -> { day -> status }
+    await Promise.all(snapshotCompanyIds.map(async (cid) => {
+      try {
+        const snapshot = await getLatestSnapshot(cid, globalMonth, 'attendance');
+        if (snapshot) {
+          const headers: string[] = typeof snapshot.headers === 'string' ? JSON.parse(snapshot.headers) : snapshot.headers;
+          const rows: string[][] = typeof snapshot.rows === 'string' ? JSON.parse(snapshot.rows) : snapshot.rows;
+          if (headers && rows) {
+            for (const row of rows) {
+              const name = row[1]; // 姓名在第2列
+              if (!name) continue;
+              if (!snapshotOverrideMap[name]) snapshotOverrideMap[name] = {};
+              for (let i = 2; i < row.length && i < headers.length; i++) {
+                const dayNum = parseInt(headers[i]);
+                if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31 && row[i]) {
+                  snapshotOverrideMap[name][dayNum] = row[i];
+                }
+              }
+            }
+          }
+        }
+      } catch { /* 静默 */ }
+    }));
+    
+    const records: EmployeeAttendanceRecord[] = targetStats.map(({ user, stats, companyName: empCompanyName }) => {
         // 构建dailyData字段
         const dailyData: Record<string, string> = {};
         
@@ -2152,23 +2933,45 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
         const month = parseInt(monthStr) - 1; // JavaScript月份从0开始
         const daysInMonth = new Date(year, month + 1, 0).getDate();
         
+        // 🔥 获取自定义日期调整（法定调班规则）
+        const confirmCompanyKey = (targetCompanyName === 'hydodo' || targetCompanyName.includes('海多多')) ? 'hydodo' : 'eyewind';
+        const confirmRuleEngine = AttendanceRuleManager.getEngine(confirmCompanyKey);
+        const confirmRuleConfig = (confirmRuleEngine as any).rules;
+        const confirmCustomDays = confirmRuleConfig?.workdaySwapRules?.customDays || [];
+        const confirmCustomDayMap = new Map<string, { type: string; reason: string }>();
+        confirmCustomDays.forEach((day: any) => {
+            confirmCustomDayMap.set(day.date, { type: day.type, reason: day.reason });
+        });
+        
         for (let day = 1; day <= daysInMonth; day++) {
             const date = new Date(year, month, day);
             const dateKey = `${monthStr}-${String(day).padStart(2, '0')}`;
+            const fullDateKey = `${year}-${monthStr}-${String(day).padStart(2, '0')}`;
+            
+            // 🔥 检查自定义日期调整（customDays 优先于 holidays）
+            const customDay = confirmCustomDayMap.get(fullDateKey);
             
             // 检查是否为法定工作日
             const holidayInfo = holidays[dateKey];
             const isWeekend = date.getDay() === 0 || date.getDay() === 6;
             let isWorkDay = !isWeekend;
             
-            if (holidayInfo) {
+            // 🔥 优先级：customDays > holidays > 默认周末判断
+            if (customDay) {
+                isWorkDay = customDay.type === 'workday';
+            } else if (holidayInfo) {
                 if (holidayInfo.holiday === false) isWorkDay = true; // 补班日
                 else if (holidayInfo.holiday === true) isWorkDay = false; // 法定节假日
             }
             
-            // 非工作日标记为-
+            // 非工作日标记
             if (!isWorkDay) {
-                dailyData[String(day)] = '-';
+                // 🔥 自定义假日显示原因（如"春节假期"、"带薪福利假"）
+                if (customDay && customDay.type === 'holiday') {
+                    dailyData[String(day)] = customDay.reason || '-';
+                } else {
+                    dailyData[String(day)] = '-';
+                }
                 continue;
             }
             
@@ -2219,18 +3022,54 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             if (hasLeave) {
                 dailyData[String(day)] = leaveType;
             } else {
-                // 检查是否有异常（迟到、缺卡等）
-                const hasLate = dayAttendance.records.some(r => r.timeResult === 'Late');
-                const hasMissing = dayAttendance.records.some(r => r.timeResult === 'NotSigned');
-                const hasAbsenteeism = dayAttendance.records.length === 0 || 
-                    dayAttendance.records.every(r => r.timeResult === 'NotSigned');
+                // 🔥 额外检查：如果打卡记录中有 APPROVE 类型（审批/请假），不算缺卡
+                const hasApproveRecord = dayAttendance.records.some(r => r.sourceType === 'APPROVE' || r.procInstId);
                 
-                if (hasAbsenteeism) {
-                    dailyData[String(day)] = '旷工';
-                } else if (hasLate || hasMissing) {
-                    dailyData[String(day)] = '√'; // 有异常但仍标记为出勤
+                // 🔥 法定补班日：只要不是请假，都显示法定补班
+                if (customDay && customDay.type === 'workday') {
+                    dailyData[String(day)] = customDay.reason || '法定补班';
                 } else {
-                    dailyData[String(day)] = '√'; // 正常出勤
+                    // 检查是否有异常（迟到、缺卡等）
+                    const hasAbsenteeism = dayAttendance.records.length === 0 || 
+                        dayAttendance.records.every(r => r.timeResult === 'NotSigned');
+                    
+                    if (hasAbsenteeism) {
+                        // 🔥 如果全是 NotSigned 但有审批记录，说明是请假不是旷工
+                        if (hasApproveRecord) {
+                            dailyData[String(day)] = '√';
+                        } else {
+                            dailyData[String(day)] = '旷工';
+                        }
+                    } else {
+                        // 🔥 检查缺卡（只有一边打卡）
+                        const hasValidOnDuty = dayAttendance.records.some(r => r.checkType === 'OnDuty' && r.timeResult !== 'NotSigned');
+                        const hasValidOffDuty = dayAttendance.records.some(r => r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned');
+                        const isMissing = dayAttendance.status === 'incomplete' || (!hasValidOnDuty && hasValidOffDuty) || (hasValidOnDuty && !hasValidOffDuty);
+                        if (isMissing && !hasApproveRecord) {
+                            dailyData[String(day)] = '缺卡';
+                        } else {
+                            // 检查迟到
+                            const lateRecord = dayAttendance.records.find(r => r.timeResult === 'Late' || r.timeResult === 'SeriousLate');
+                            if (lateRecord) {
+                                const lateMinutes = lateRecord.baseCheckTime && lateRecord.userCheckTime
+                                    ? Math.round((new Date(lateRecord.userCheckTime).getTime() - new Date(lateRecord.baseCheckTime).getTime()) / 60000)
+                                    : 0;
+                                dailyData[String(day)] = lateMinutes > 0 ? `迟到${lateMinutes}分钟` : '迟到';
+                            } else {
+                                dailyData[String(day)] = '√';
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 🔥 快照数据覆盖：如果有已保存的快照数据，以快照为最高优先级
+        const employeeSnapshot = snapshotOverrideMap[user.name];
+        if (employeeSnapshot) {
+            for (const [dayStr, snapshotStatus] of Object.entries(employeeSnapshot)) {
+                if (snapshotStatus && snapshotStatus !== '') {
+                    dailyData[dayStr] = snapshotStatus;
                 }
             }
         }
@@ -2351,10 +3190,16 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
 
             // 检查周末加班
             const dateKey = `${monthStr}-${String(day).padStart(2, '0')}`;
+            const fullDateKeyForRemarks = `${year}-${monthStr}-${String(day).padStart(2, '0')}`;
             const holidayInfo = holidays[dateKey];
+            const customDayForRemarks = confirmCustomDayMap.get(fullDateKeyForRemarks);
             const dateObj = new Date(year, month, day);
             const dayOfWeek = dateObj.getDay();
-            if ([0, 6].includes(dayOfWeek) && (!holidayInfo || holidayInfo.holiday !== false)) {
+            // 🔥 判断是否为非工作日：考虑 customDays
+            const isNonWorkday = customDayForRemarks 
+                ? customDayForRemarks.type === 'holiday'
+                : ([0, 6].includes(dayOfWeek) && (!holidayInfo || holidayInfo.holiday !== false));
+            if (isNonWorkday) {
                 const onTime = dayAttendance.records.find((r: any) => r.checkType === 'OnDuty')?.userCheckTime;
                 const offTime = dayAttendance.records.find((r: any) => r.checkType === 'OffDuty')?.userCheckTime;
                 if (onTime && offTime) {
@@ -2362,12 +3207,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                     const remarkEntry = `加班 ${year}-${monthStr}-${String(day).padStart(2, '0')} 共${hours}小时`;
                     if (!remarks.includes(remarkEntry)) remarks.push(remarkEntry);
                 }
-            }
-
-            // 检查缺卡
-            if (dayAttendance.status === 'incomplete') {
-                const remarkEntry = `缺卡 ${year}-${monthStr}-${String(day).padStart(2, '0')}`;
-                if (!remarks.includes(remarkEntry)) remarks.push(remarkEntry);
             }
         }
         
@@ -2385,14 +3224,14 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             sent_at: null, 
             confirmed_at: null, 
             viewed_at: null, 
-            mainCompany: targetCompanyName, 
+            mainCompany: empCompanyName || targetCompanyName, 
             signatureBase64: null, 
             isSigned: false, 
             dailyData
         };
     });
 
-    onNavigateToConfirmation(records, globalMonth, targetCompanyName);
+    onNavigateToConfirmation(records, globalMonth, targetCompanyName, 'dashboard', holidays);
   };
 
   const renderContent = () => {
@@ -2417,7 +3256,7 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
             holidays={holidays} 
             companyName={view.companyName || '全部'} 
             currentCompany={currentCompany} 
-            onConfirm={() => handleConfirmAttendance(view.companyName === '全部' ? currentCompany : view.companyName || '')} 
+            onConfirm={() => handleConfirmAttendance(view.companyName === '全部' ? currentCompany : view.companyName || '', 'calendar')} 
             onUndo={handleUndo} 
             canUndo={history.length > 0} 
             canEdit={canEditCalendar} 
@@ -2433,12 +3272,20 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
           <div className="space-y-8">
             {/* 🔥 移除重复的月份选择器，使用菜单栏的全局月份选择器 */}
             {companyNames.length > 0 && (
-              <div className="flex justify-between items-end border-b border-slate-200 dark:border-slate-700 pb-1 mb-4">
+              <div>
+                <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-2 pb-2 px-1">
+                  <span>当前公司主体：</span>
+                  <span className="font-semibold text-sky-600 dark:text-sky-400">{currentCompany === 'eyewind' ? '风眼' : '海多多'}</span>
+                  <span className="text-slate-400 dark:text-slate-500 font-medium">&gt;</span>
+                  <span className="text-slate-600 dark:text-slate-300 font-medium">{activeCompany}</span>
+                </div>
+                <div className="flex justify-between items-end border-b border-slate-200 dark:border-slate-700 pb-1 mb-4">
                 <div className="flex flex-wrap gap-2">
                   {companyNames.map(name => (
                     <button key={name} onClick={() => setActiveCompany(name)} className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors border-b-2 ${activeCompany === name ? 'border-sky-500 text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-900/20' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'}`}>{name}</button>
                   ))}
                 </div>
+              </div>
               </div>
             )}
             {isDataLoading ? (
@@ -2458,12 +3305,16 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 onDownloadReports={handleDownloadReports}
                 onCustomDownload={handleOpenCustomDownload}
                 onPushReport={handleOpenPushModal}
+                onViewSnapshotLogs={handleViewSnapshotLogs}
+                onConfirmAttendance={handleConfirmAttendance}
                 companyEmployeeStats={companyEmployeeStats} companyAggregate={companyAggregate} dailyTrend={dailyTrend}
                 onSelectEmployeeForAnalysis={setAnalysisEmployee} activeCompany={activeCompany}
                 canViewAiAnalysis={canViewAiAnalysis}
                 lateExemptionEnabled={lateExemptionEnabled}
                 fullAttendanceEnabled={fullAttendanceEnabled}
                 performancePenaltyEnabled={performancePenaltyEnabled}
+                analyticsSectionOpen={analyticsPanelOpen}
+                onAnalyticsSectionToggle={setAnalyticsPanelOpen}
               />
             )}
           </div>
@@ -2476,7 +3327,6 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
       <header className="flex justify-between items-start">
         <div>
           <h2 className="text-3xl font-bold text-slate-900 dark:text-white">{view.type === 'dashboard' ? '考勤仪表盘' : view.type === 'calendar' ? '考勤日历' : view.type === 'allEmployees' ? '全体员工列表' : '考勤员工列表'}</h2>
-          <p className="text-slate-600 dark:text-slate-400 mt-1">当前查看: <span className="font-semibold text-sky-600 dark:text-sky-400">{currentCompany === 'eyewind' ? '风眼' : '海多多'}</span></p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setShowEditLogsModal(true)} className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-slate-600 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md shadow-sm transition-all" title="查看编辑日志"><HistoryIcon className="w-4 h-4" /><span className="hidden sm:inline">编辑日志</span></button>
@@ -2499,6 +3349,179 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
           setAnalysisEmployee(null); 
         } 
       }} />
+
+      {/* 🔥 报表操作日志弹窗 */}
+      {showSnapshotLogsModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-5xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
+              <div className="flex items-center gap-2">
+                {snapshotDetail && (
+                  <button onClick={() => { setSnapshotDetail(null); setSnapshotDetailEditLogs([]); }} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors mr-1">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+                  </button>
+                )}
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  {snapshotDetail ? `${snapshotDetail.company_display_name || ''} - v${snapshotDetail.version} 详情` : '报表操作日志'}
+                </h3>
+              </div>
+              <button onClick={() => { setShowSnapshotLogsModal(false); setSnapshotDetail(null); setSnapshotDetailEditLogs([]); }} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {snapshotDetail ? (
+                // 详情视图
+                isLoadingSnapshotDetail ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2Icon className="w-6 h-6 animate-spin text-sky-500" />
+                    <span className="ml-2 text-slate-500">加载详情...</span>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {[
+                        { label: '公司', value: snapshotDetail.company_display_name || snapshotDetail.company_id },
+                        { label: '报表类型', value: ({ attendance: '考勤表', late: '迟到统计', performance: '绩效统计' } as any)[snapshotDetail.report_type] || snapshotDetail.report_type },
+                        { label: '版本', value: `v${snapshotDetail.version}` },
+                        { label: '操作人', value: snapshotDetail.saved_by_name || '-' },
+                        { label: '行数', value: snapshotDetail.row_count || '-' },
+                        { label: '红框数', value: snapshotDetail.red_frame_count || 0 },
+                        { label: '编辑数', value: snapshotDetail.edit_count || 0 },
+                        { label: '备注', value: snapshotDetail.remarks || '-' },
+                        { label: '时间', value: snapshotDetail.created_at ? new Date(snapshotDetail.created_at).toLocaleString('zh-CN') : '-' },
+                      ].map((item, i) => (
+                        <div key={i} className="bg-slate-50 dark:bg-slate-900/50 rounded-lg p-3">
+                          <div className="text-xs text-slate-500 dark:text-slate-400">{item.label}</div>
+                          <div className="text-sm font-medium text-slate-800 dark:text-slate-200 mt-0.5">{String(item.value)}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 编辑日志 */}
+                    <div>
+                      <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">编辑记录 ({snapshotDetailEditLogs.length})</h4>
+                      {snapshotDetailEditLogs.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400 bg-slate-50 dark:bg-slate-900/50 rounded-lg">
+                          本次保存无编辑修改
+                        </div>
+                      ) : (
+                        <div className="overflow-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-slate-100 dark:bg-slate-700">
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-left whitespace-nowrap">#</th>
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-left whitespace-nowrap">员工</th>
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-left whitespace-nowrap">修改列</th>
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-left whitespace-nowrap">修改前</th>
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-center whitespace-nowrap"></th>
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-left whitespace-nowrap">修改后</th>
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-left whitespace-nowrap">操作人</th>
+                                <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-300 text-left whitespace-nowrap">时间</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {snapshotDetailEditLogs.map((log: any, i: number) => (
+                                <tr key={log.id || i} className="border-t border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                  <td className="py-2 px-3 text-slate-400 text-xs">{i + 1}</td>
+                                  <td className="py-2 px-3 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">{log.employee_name || '-'}</td>
+                                  <td className="py-2 px-3 text-slate-600 dark:text-slate-400 whitespace-nowrap">{log.column_name || '-'}</td>
+                                  <td className="py-2 px-3 whitespace-nowrap">
+                                    <span className="inline-block px-2 py-0.5 rounded bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-xs line-through">
+                                      {log.old_value || '(空)'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3 text-center text-slate-400">→</td>
+                                  <td className="py-2 px-3 whitespace-nowrap">
+                                    <span className="inline-block px-2 py-0.5 rounded bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 text-xs font-medium">
+                                      {log.new_value || '(空)'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3 text-slate-500 dark:text-slate-400 text-xs whitespace-nowrap">{log.edited_by_name || '-'}</td>
+                                  <td className="py-2 px-3 text-slate-500 dark:text-slate-400 text-xs whitespace-nowrap">{log.edited_at ? new Date(log.edited_at).toLocaleString('zh-CN') : '-'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              ) : (
+                // 列表视图
+                isLoadingSnapshotLogs ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2Icon className="w-6 h-6 animate-spin text-sky-500" />
+                    <span className="ml-2 text-slate-500">加载中...</span>
+                  </div>
+                ) : snapshotLogs.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400">暂无操作记录</div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 dark:border-slate-700 text-left">
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">公司</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">报表类型</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">版本</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">行数</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">红框</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">编辑数</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">备注</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">操作人</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400">时间</th>
+                        <th className="py-2 px-3 font-medium text-slate-600 dark:text-slate-400"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {snapshotLogs.map((log: any, idx: number) => {
+                        const reportTypeMap: Record<string, string> = { attendance: '考勤表', late: '迟到统计', performance: '绩效统计' };
+                        return (
+                          <tr key={log.id || idx} className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer" onClick={async () => {
+                            setIsLoadingSnapshotDetail(true);
+                            setSnapshotDetail(log);
+                            setSnapshotDetailEditLogs([]);
+                            try {
+                              const [detail, editLogs] = await Promise.all([
+                                getSnapshotById(log.id),
+                                getEditLogs(log.id)
+                              ]);
+                              if (detail) setSnapshotDetail(detail);
+                              setSnapshotDetailEditLogs(editLogs || []);
+                            } catch { /* keep log as fallback */ }
+                            finally { setIsLoadingSnapshotDetail(false); }
+                          }}>
+                            <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300">{log.company_display_name || log.company_id}</td>
+                            <td className="py-2.5 px-3">
+                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                                log.report_type === 'attendance' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' :
+                                log.report_type === 'late' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' :
+                                'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                              }`}>
+                                {reportTypeMap[log.report_type] || log.report_type}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">v{log.version}</td>
+                            <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">{log.row_count || '-'}</td>
+                            <td className="py-2.5 px-3">{log.red_frame_count > 0 ? <span className="text-red-600 font-medium">{log.red_frame_count}</span> : <span className="text-slate-400">0</span>}</td>
+                            <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">{log.edit_count || 0}</td>
+                            <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 text-xs max-w-[200px] truncate" title={log.remarks || ''}>{log.remarks || <span className="text-slate-300 dark:text-slate-600">-</span>}</td>
+                            <td className="py-2.5 px-3 text-slate-600 dark:text-slate-400">{log.saved_by_name || '-'}</td>
+                            <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 text-xs">{log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : '-'}</td>
+                            <td className="py-2.5 px-3">
+                              <span className="text-sky-500 hover:text-sky-600 text-xs">查看</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 推送弹窗 */}
       {showPushModal && (
@@ -3225,16 +4248,34 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                   </svg>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">CSV报表预览</h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">预览前50行数据，支持左右滑动查看完整内容</p>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">CSV报表预览（可编辑）</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">预览全部数据，支持左右滑动查看完整内容，点击单元格可编辑</p>
                 </div>
               </div>
-              <button
-                onClick={() => setShowPreviewModal(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-              >
-                <XIcon className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {currentSnapshotInfo && (
+                  <span className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded">
+                    v{currentSnapshotInfo.version} · {currentSnapshotInfo.savedByName} · {new Date(currentSnapshotInfo.savedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+                <button
+                  onClick={loadSnapshotHistory}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-slate-600 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 bg-slate-100 dark:bg-slate-700 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                >
+                  <HistoryIcon className="w-4 h-4" />
+                  历史版本
+                </button>
+                <button
+                  onClick={() => {
+                    setShowPreviewModal(false);
+                    setEditedData(new Map());
+                    setEditedCells(new Set());
+                  }}
+                  className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                >
+                  <XIcon className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Tab切换 */}
@@ -3243,7 +4284,27 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                 {previewTabs.map((tab, index) => (
                   <button
                     key={index}
-                    onClick={() => setActivePreviewTab(index)}
+                    role="tab"
+                    aria-selected={activePreviewTab === index}
+                    onClick={() => {
+                      setActivePreviewTab(index);
+                      // 🔥 切换tab时加载最新快照信息
+                      loadCurrentTabSnapshotInfo(index);
+                      // 🔥 切换tab时更新文件名 - 使用tab名称解析公司和报表类型
+                      const tabName = tab.name;
+                      // tab名称格式可能是 "考勤表" 或 "深圳市XX公司-考勤表"
+                      const dashIdx = tabName.lastIndexOf('-');
+                      if (dashIdx > 0) {
+                        // 全部模式：tab名称包含公司名
+                        const tabCompany = tabName.substring(0, dashIdx);
+                        const tabType = tabName.substring(dashIdx + 1);
+                        setPreviewFileName(`${tabCompany}-${globalMonth}-${tabType}.csv`);
+                      } else {
+                        // 单公司模式
+                        const companyPrefix = currentCompany === 'eyewind' ? '深圳市风眼科技有限公司' : currentCompany === 'hydodo' ? '深圳市海多多科技有限公司' : currentCompany;
+                        setPreviewFileName(`${companyPrefix}-${globalMonth}-${tabName}.csv`);
+                      }
+                    }}
                     className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-all ${
                       activePreviewTab === index
                         ? 'bg-white dark:bg-slate-800 text-sky-600 dark:text-sky-400 border-b-2 border-sky-600 dark:border-sky-400'
@@ -3269,21 +4330,68 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
               />
             </div>
 
-            {/* 表格预览 - 支持横向滚动 */}
-            <div className="flex-1 overflow-hidden p-4 min-h-0">
-              <div className="h-full border border-slate-200 dark:border-slate-700 rounded-lg overflow-auto">
-                {previewTabs[activePreviewTab] && (
+            {/* 表格预览 - 支持横向和纵向滚动及编辑 */}
+            <div className="flex-1 p-4 min-h-0 overflow-hidden flex flex-col">
+              <div className="flex-1 border border-slate-200 dark:border-slate-700 rounded-lg overflow-auto">
+                {previewTabs[activePreviewTab] && (() => {
+                  // 🔥 计算周末日期（用于高亮显示）
+                  const [y, m] = globalMonth.split('-').map(Number);
+                  const weekendDays = new Set<number>();
+                  const daysInMonth = new Date(y, m, 0).getDate();
+                  
+                  for (let day = 1; day <= daysInMonth; day++) {
+                    const date = new Date(y, m - 1, day);
+                    const dayOfWeek = date.getDay();
+                    if (dayOfWeek === 0 || dayOfWeek === 6) {
+                      weekendDays.add(day);
+                    }
+                  }
+
+                  // 🔥 计算每个日期列需要的最小宽度（根据内容动态调整）
+                  const dateColWidths = new Map<number, number>();
+                  const currentTab = previewTabs[activePreviewTab];
+                  currentTab.headers.forEach((header, idx) => {
+                    const isDateColumn = /^\d+$/.test(header) && parseInt(header) >= 1 && parseInt(header) <= 31;
+                    if (isDateColumn) {
+                      let maxLen = 1; // 默认1个字符（如 √）
+                      for (const row of currentTab.rows) {
+                        const cellVal = row[idx] || '';
+                        if (cellVal.length > maxLen) maxLen = cellVal.length;
+                      }
+                      // 每个中文字符约14px，加上padding
+                      dateColWidths.set(idx, maxLen <= 1 ? 50 : Math.max(50, maxLen * 14 + 16));
+                    }
+                  });
+                  
+                  return (
                   <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-xs">
                     <thead className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
                       <tr>
-                        {previewTabs[activePreviewTab].headers.map((header, idx) => (
-                          <th
-                            key={idx}
-                            className="px-3 py-2 text-left font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap border-r border-slate-200 dark:border-slate-700 last:border-r-0"
-                          >
-                            {header}
-                          </th>
-                        ))}
+                        {previewTabs[activePreviewTab].headers.map((header, idx) => {
+                          // 判断是否为日期列（1-31的数字）
+                          const isDateColumn = /^\d+$/.test(header) && parseInt(header) >= 1 && parseInt(header) <= 31;
+                          const isWeekend = isDateColumn && weekendDays.has(parseInt(header));
+                          
+                          return (
+                            <th
+                              key={idx}
+                              className={`px-3 py-2 text-center font-semibold text-slate-700 dark:text-slate-300 whitespace-nowrap border-r border-slate-200 dark:border-slate-700 last:border-r-0 ${
+                                isWeekend ? 'bg-slate-100 dark:bg-slate-700/50' : ''
+                              }`}
+                              style={
+                                header.includes('备注')
+                                  ? { minWidth: '300px', maxWidth: '500px' }
+                                  : idx === 0 || idx === 1 || header === '姓名' || header === '序号'
+                                  ? { minWidth: '80px', maxWidth: '120px' }
+                                  : isDateColumn
+                                  ? { minWidth: `${dateColWidths.get(idx) || 50}px`, width: `${dateColWidths.get(idx) || 50}px` }
+                                  : {}
+                              }
+                            >
+                              {header}
+                            </th>
+                          );
+                        })}
                       </tr>
                     </thead>
                     <tbody className="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
@@ -3292,17 +4400,82 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                           {row.map((cell, cellIdx) => {
                             // 检查是否是备注列（通常在第7或第8列，包含"备注"关键字）
                             const isRemarkColumn = previewTabs[activePreviewTab].headers[cellIdx]?.includes('备注');
+                            // 判断是否为日期列（1-31的数字）
+                            const header = previewTabs[activePreviewTab].headers[cellIdx];
+                            const isDateColumn = /^\d+$/.test(header) && parseInt(header) >= 1 && parseInt(header) <= 31;
+                            const isWeekend = isDateColumn && weekendDays.has(parseInt(header));
+                            
+                            const cellKey = `${activePreviewTab}-${rowIdx}-${cellIdx}`;
+                            const isEdited = editedCells.has(cellKey);
+                            const displayValue = editedData.get(cellKey) ?? cell;
+                            const isMissingCell = displayValue.includes('缺卡') || displayValue === '旷工';
                             
                             return (
                               <td
                                 key={cellIdx}
-                                className={`px-3 py-2 text-slate-600 dark:text-slate-400 border-r border-slate-100 dark:border-slate-700 last:border-r-0 ${
-                                  isRemarkColumn ? 'whitespace-pre-line' : 'whitespace-nowrap'
+                                className={`px-1 py-1 border-r border-slate-100 dark:border-slate-700 last:border-r-0 ${
+                                  isMissingCell ? 'ring-2 ring-inset ring-red-400 bg-red-50 dark:bg-red-900/20' : isEdited ? 'bg-blue-100 dark:bg-blue-900/40' : isWeekend ? 'bg-slate-100/70 dark:bg-slate-700/30' : ''
                                 }`}
-                                style={isRemarkColumn ? { maxWidth: '400px', minWidth: '200px' } : {}}
-                                title={cell}
+                                style={
+                                  isRemarkColumn 
+                                    ? { maxWidth: '500px', minWidth: '300px', verticalAlign: 'top' }
+                                    : cellIdx === 0 || cellIdx === 1 // 序号和姓名列
+                                    ? { minWidth: '80px', maxWidth: '120px' }
+                                    : isDateColumn
+                                    ? { minWidth: `${dateColWidths.get(cellIdx) || 50}px`, width: `${dateColWidths.get(cellIdx) || 50}px`, textAlign: 'center' as const, whiteSpace: 'nowrap' as const }
+                                    : {}
+                                }
                               >
-                                {cell}
+                                {isRemarkColumn ? (
+                                  <textarea
+                                    value={displayValue}
+                                    onChange={(e) => {
+                                      const newValue = e.target.value;
+                                      const newEditedData = new Map(editedData);
+                                      const newEditedCells = new Set(editedCells);
+                                      
+                                      if (newValue !== cell) {
+                                        newEditedData.set(cellKey, newValue);
+                                        newEditedCells.add(cellKey);
+                                      } else {
+                                        newEditedData.delete(cellKey);
+                                        newEditedCells.delete(cellKey);
+                                      }
+                                      
+                                      setEditedData(newEditedData);
+                                      setEditedCells(newEditedCells);
+                                    }}
+                                    className="w-full px-2 py-1 text-slate-600 dark:text-slate-400 bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-sky-500 rounded resize-none"
+                                    style={{ minHeight: '60px', lineHeight: '1.5' }}
+                                    rows={Math.max(3, displayValue.split('\n').length)}
+                                    title={displayValue}
+                                  />
+                                ) : (
+                                  <input
+                                    type="text"
+                                    value={displayValue}
+                                    onChange={(e) => {
+                                      const newValue = e.target.value;
+                                      const newEditedData = new Map(editedData);
+                                      const newEditedCells = new Set(editedCells);
+                                      
+                                      if (newValue !== cell) {
+                                        newEditedData.set(cellKey, newValue);
+                                        newEditedCells.add(cellKey);
+                                      } else {
+                                        newEditedData.delete(cellKey);
+                                        newEditedCells.delete(cellKey);
+                                      }
+                                      
+                                      setEditedData(newEditedData);
+                                      setEditedCells(newEditedCells);
+                                    }}
+                                    className={`w-full px-2 py-1 text-slate-600 dark:text-slate-400 bg-transparent border-0 focus:outline-none focus:ring-1 focus:ring-sky-500 rounded whitespace-nowrap ${
+                                      isDateColumn ? 'text-center' : ''
+                                    }`}
+                                    title={displayValue}
+                                  />
+                                )}
                               </td>
                             );
                           })}
@@ -3310,35 +4483,290 @@ export const AttendanceDashboardPage: React.FC<AttendanceDashboardPageProps> = (
                       ))}
                     </tbody>
                   </table>
-                )}
+                  );
+                })()}
               </div>
-              {previewTabs[activePreviewTab] && previewTabs[activePreviewTab].rows.length >= 50 && (
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 text-center">
-                  仅显示前50行数据，完整数据请下载查看
-                </p>
-              )}
+              {(() => {
+                // 🔥 统计当前表格的红框数据（缺卡/旷工）
+                const currentTabData = previewTabs[activePreviewTab];
+                let redFrameCount = 0;
+                if (currentTabData) {
+                  currentTabData.rows.forEach((row, rowIdx) => {
+                    row.forEach((cell, cellIdx) => {
+                      const cellKey = `${activePreviewTab}-${rowIdx}-${cellIdx}`;
+                      const displayValue = editedData.get(cellKey) ?? cell;
+                      if (displayValue.includes('缺卡') || displayValue === '旷工') {
+                        redFrameCount++;
+                      }
+                    });
+                  });
+                }
+                
+                // 统计当前表格的编辑数量
+                const currentTabEdits = Array.from(editedCells).filter(key => {
+                  const [tabIndex] = (key as string).split('-').map(Number);
+                  return tabIndex === activePreviewTab;
+                }).length;
+                
+                const parts: string[] = [];
+                if (redFrameCount > 0) {
+                  parts.push(`${redFrameCount} 个异常数据（缺卡/旷工，红框显示）`);
+                }
+                if (currentTabEdits > 0) {
+                  parts.push(`已编辑 ${currentTabEdits} 个单元格（蓝色高亮显示）`);
+                  if (previewTabs.length > 1) {
+                    parts.push(`总计编辑 ${editedCells.size} 个单元格`);
+                  }
+                }
+                
+                if (parts.length === 0) return null;
+                
+                return (
+                  <p className="text-xs mt-2 text-center">
+                    {redFrameCount > 0 && <span className="text-red-500 dark:text-red-400">{parts[0]}</span>}
+                    {redFrameCount > 0 && currentTabEdits > 0 && <span className="text-slate-400"> · </span>}
+                    {currentTabEdits > 0 && <span className="text-blue-600 dark:text-blue-400">
+                      【{currentTabData?.name || '未知'}】{parts[redFrameCount > 0 ? 1 : 0]}
+                      {previewTabs.length > 1 && ` · ${parts[parts.length - 1]}`}
+                    </span>}
+                  </p>
+                );
+              })()}
             </div>
 
             {/* 弹窗底部 */}
-            <div className="flex items-center justify-end gap-3 p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
-              <button
-                onClick={() => setShowPreviewModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
-              >
-                取消
-              </button>
+            <div className="flex flex-col gap-2 p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
+              {/* 编辑备注输入 */}
+              {editedCells.size > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">📝 编辑备注：</span>
+                  <input
+                    type="text"
+                    value={snapshotRemarks}
+                    onChange={e => setSnapshotRemarks(e.target.value)}
+                    placeholder="简要说明本次修改内容，如：修正了所有缺卡记录、调整了张三的迟到时长等"
+                    className="flex-1 px-3 py-1.5 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                  />
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-3">
               <button
                 onClick={() => {
-                  if (previewDownloadCallback) {
-                    previewDownloadCallback();
-                    setShowPreviewModal(false);
-                  }
+                  setEditedData(new Map());
+                  setEditedCells(new Set());
                 }}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-lg shadow-sm transition-all"
+                disabled={editedCells.size === 0}
+                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                <DownloadIcon className="w-4 h-4" />
-                <span>下载</span>
+                重置编辑
               </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => {
+                    setShowPreviewModal(false);
+                    setEditedData(new Map());
+                    setEditedCells(new Set());
+                  }}
+                  className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => handleSaveSnapshot()}
+                  disabled={isSavingSnapshot || editedCells.size === 0}
+                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg shadow-sm transition-all ${
+                    editedCells.size === 0
+                      ? 'bg-slate-300 dark:bg-slate-600 text-slate-500 dark:text-slate-400 cursor-not-allowed'
+                      : 'text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed'
+                  }`}
+                >
+                  {isSavingSnapshot ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <CheckCircleIcon className="w-4 h-4" />}
+                  <span>{isSavingSnapshot ? '保存中...' : '保存'}</span>
+                </button>
+                <button
+                  onClick={() => {
+                    if (previewDownloadCallback) {
+                      previewDownloadCallback();
+                      setShowPreviewModal(false);
+                      setEditedData(new Map());
+                      setEditedCells(new Set());
+                    }
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-sky-600 hover:bg-sky-700 rounded-lg shadow-sm transition-all"
+                >
+                  <DownloadIcon className="w-4 h-4" />
+                  <span>下载</span>
+                </button>
+              </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 快照历史弹窗 */}
+      {showSnapshotHistory && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg flex items-center justify-center">
+                  <HistoryIcon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">快照历史版本</h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">共 {snapshotHistoryList.length} 个版本</p>
+                </div>
+              </div>
+              <button onClick={() => { setShowSnapshotHistory(false); setSelectedSnapshotLogs(null); setSelectedSnapshotDetail(null); }} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {snapshotHistoryLoading ? (
+                <div className="flex items-center justify-center h-40"><Loader2Icon className="w-6 h-6 animate-spin text-slate-400" /></div>
+              ) : snapshotHistoryList.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-40 text-slate-500">
+                  <HistoryIcon className="w-10 h-10 mb-2 opacity-40" />
+                  <span>暂无保存记录</span>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {snapshotHistoryList.map((snap: any) => (
+                    <div key={snap.id} className="p-4 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-indigo-300 dark:hover:border-indigo-600 transition-all">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <span className="px-2 py-0.5 text-xs font-bold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded">v{snap.version}</span>
+                          <span className="text-sm font-medium text-slate-900 dark:text-white">{snap.tab_name}</span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            {snap.report_type === 'attendance' ? '考勤表' : snap.report_type === 'late' ? '迟到统计表' : '考勤绩效统计'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {snap.edit_count > 0 && (
+                            <button
+                              onClick={() => loadSnapshotEditLogs(snap.id)}
+                              className="px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 rounded hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-colors"
+                            >
+                              查看编辑日志 ({snap.edit_count})
+                            </button>
+                          )}
+                          <button
+                            onClick={async () => {
+                              try {
+                                const detail = await getSnapshotById(snap.id);
+                                setSelectedSnapshotDetail(detail);
+                              } catch { alert('加载失败'); }
+                            }}
+                            className="px-2 py-1 text-xs font-medium text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-900/20 rounded hover:bg-sky-100 dark:hover:bg-sky-900/40 transition-colors"
+                          >
+                            查看数据
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 mt-2 text-xs text-slate-500 dark:text-slate-400">
+                        <span>{snap.row_count} 行 × {snap.column_count} 列</span>
+                        {snap.red_frame_count > 0 && <span className="text-red-500">红框: {snap.red_frame_count}</span>}
+                        {snap.edit_count > 0 && <span className="text-blue-500">编辑: {snap.edit_count}</span>}
+                        <span>保存人: {snap.saved_by_name || '未知'}</span>
+                        <span>{new Date(snap.created_at).toLocaleString('zh-CN')}</span>
+                      </div>
+                      {snap.remarks && (
+                        <div className="mt-1.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded px-2 py-1 border border-amber-200 dark:border-amber-800">
+                          💬 备注: {snap.remarks}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 编辑日志详情弹窗 */}
+      {selectedSnapshotLogs !== null && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-5xl max-h-[70vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">编辑日志详情</h3>
+              <button onClick={() => setSelectedSnapshotLogs(null)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              {selectedSnapshotLogs.length === 0 ? (
+                <div className="text-center text-slate-500 py-8">暂无编辑日志</div>
+              ) : (
+                <table className="w-full text-sm border-collapse table-fixed">
+                  <thead className="bg-slate-50 dark:bg-slate-900/50 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 border-b border-slate-200 dark:border-slate-700 w-16">员工</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 border-b border-slate-200 dark:border-slate-700 w-14">列名</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 border-b border-slate-200 dark:border-slate-700">修改前</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 border-b border-slate-200 dark:border-slate-700">修改后</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 border-b border-slate-200 dark:border-slate-700 w-16">操作人</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-slate-500 border-b border-slate-200 dark:border-slate-700 w-28">时间</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedSnapshotLogs.map((log: any, i: number) => (
+                      <tr key={i} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        <td className="px-3 py-2 text-slate-900 dark:text-white whitespace-nowrap">{log.employee_name || '-'}</td>
+                        <td className="px-3 py-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">{log.column_name || '-'}</td>
+                        <td className="px-3 py-2"><span className="px-1.5 py-0.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded text-xs whitespace-nowrap">{log.old_value || '(空)'}</span></td>
+                        <td className="px-3 py-2"><span className="px-1.5 py-0.5 bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400 rounded text-xs whitespace-nowrap">{log.new_value || '(空)'}</span></td>
+                        <td className="px-3 py-2 text-slate-500 dark:text-slate-400 whitespace-nowrap">{log.edited_by_name || '-'}</td>
+                        <td className="px-3 py-2 text-slate-500 dark:text-slate-400 text-xs whitespace-nowrap">{log.edited_at ? new Date(log.edited_at).toLocaleString('zh-CN') : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 快照数据详情弹窗 */}
+      {selectedSnapshotDetail && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-[90vw] max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b border-slate-200 dark:border-slate-700">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {selectedSnapshotDetail.tab_name} - v{selectedSnapshotDetail.version}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {selectedSnapshotDetail.row_count} 行 × {selectedSnapshotDetail.column_count} 列 · {new Date(selectedSnapshotDetail.created_at).toLocaleString('zh-CN')}
+                </p>
+              </div>
+              <button onClick={() => setSelectedSnapshotDetail(null)} className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-4">
+              <table className="w-full text-sm border-collapse">
+                <thead className="bg-slate-50 dark:bg-slate-900/50 sticky top-0">
+                  <tr>
+                    {(typeof selectedSnapshotDetail.headers === 'string' ? JSON.parse(selectedSnapshotDetail.headers) : selectedSnapshotDetail.headers).map((h: string, i: number) => (
+                      <th key={i} className="px-2 py-1.5 text-xs font-medium text-slate-500 border border-slate-200 dark:border-slate-700 whitespace-nowrap text-center">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(typeof selectedSnapshotDetail.rows === 'string' ? JSON.parse(selectedSnapshotDetail.rows) : selectedSnapshotDetail.rows).map((row: string[], ri: number) => (
+                    <tr key={ri} className="border-b border-slate-100 dark:border-slate-700">
+                      {row.map((cell: string, ci: number) => (
+                        <td key={ci} className={`px-2 py-1 text-xs border border-slate-200 dark:border-slate-700 whitespace-nowrap text-center ${
+                          cell.includes('缺卡') || cell === '旷工' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 ring-1 ring-red-300 dark:ring-red-700' : 'text-slate-700 dark:text-slate-300'
+                        }`}>{cell}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

@@ -9,6 +9,8 @@ import dingtalkRouter from './routes/dingtalk';
 import usersRouter from './routes/users';
 import rolesRouter from './routes/roles';
 import operationLogsRouter from './routes/operation-logs';
+import reportSnapshotsRouter from './routes/report-snapshots';
+import dataSyncRouter from './routes/data-sync';
 import { auditLogger } from './middleware/auditLogger';
 
 dotenv.config();
@@ -43,6 +45,8 @@ app.use('/api/v1/push', pushRouter);
 app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/roles', rolesRouter);
 app.use('/api/v1/operation-logs', operationLogsRouter);
+app.use('/api/v1/report-snapshots', reportSnapshotsRouter);
+app.use('/api/v1/sync', dataSyncRouter);
 app.use('/etl/dingding', dingtalkRouter);
 
 // 404 处理

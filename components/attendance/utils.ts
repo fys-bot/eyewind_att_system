@@ -155,16 +155,23 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
             workEndTime: "19:00",
             lunchStartTime: "12:00",
             lunchEndTime: "13:30",
-            lateRules: [], // 空数组，不设置迟到规则
+            lateRules: [
+                {
+                    previousDayCheckoutTime: "19:00",
+                    lateThresholdTime: "09:15",
+                    description: "前一天19:00打卡，9:15算迟到"
+                }
+            ], // 🔥 配置迟到规则
+            defaultLateThresholdTime: "09:15", // 🔥 默认迟到阈值时间：超过9:15才算迟到
             lateExemptionCount: 0, // 不设置豁免
             lateExemptionMinutes: 0, // 不设置豁免时长
-            lateExemptionEnabled: true, // 启用豁免功能
+            lateExemptionEnabled: false, // 🔥 关闭豁免功能
             lateExemptionMode: 'byDate', // 'byDate'=按日期从月初到月末, 'byMinutes'=按迟到分钟数从大到小
-            performancePenaltyMode: 'capped', // 封顶模式
-            unlimitedPenaltyThresholdTime: '09:11', // 上不封顶模式：超过9:11开始扣款
-            unlimitedPenaltyCalcType: 'perMinute', // 按分钟计算
+            performancePenaltyMode: 'unlimited', // 🔥 上不封顶模式
+            unlimitedPenaltyThresholdTime: '09:15', // 上不封顶模式：超过9:15开始扣款
+            unlimitedPenaltyCalcType: 'fixed', // 🔥 固定扣款
             unlimitedPenaltyPerMinute: 5, // 每分钟5元
-            unlimitedPenaltyFixedAmount: 50, // 固定扣款50元
+            unlimitedPenaltyFixedAmount: 30, // 🔥 固定扣款30元
             cappedPenaltyType: 'ladder', // 封顶模式子类型：阶梯扣款
             cappedPenaltyPerMinute: 5, // 固定封顶模式：每分钟5元
             maxPerformancePenalty: 0, // 不设置绩效扣款
@@ -208,7 +215,7 @@ export const DEFAULT_CONFIGS: Record<string, CompanyConfig> = {
                 remoteDays: []
             },
             crossDayCheckout: {
-                enabled: false, // 禁用跨天打卡
+                enabled: true, // 🔥 启用跨天打卡规则
                 enableLookback: false,
                 lookbackDays: 3
             }
@@ -817,7 +824,7 @@ class DingTalkTokenManager {
 
             if (this.refreshTimers[company]) clearTimeout(this.refreshTimers[company]);
 
-            const response = await fetch("http://10.10.88.135:5001/etl/dingding/gettoken", {
+            const response = await fetch("http://localhost:5001/etl/dingding/gettoken", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1189,6 +1196,34 @@ export const fetchCompanyData = async (mainCompany: string, fromDate: string, to
         return cachedData;
     }
 
+    // 🔥 2. 检查是否为历史月份且已定稿，可从数据库读取
+    const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+    const now = new Date();
+    const isCurrentMonth = year === now.getFullYear() && month === (now.getMonth() + 1);
+    const companyId = (mainCompany?.includes('海多多') || mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
+
+    if (!isCurrentMonth) {
+      try {
+        const checkRes = await fetch(`http://localhost:5001/api/v1/sync/snapshot/${companyId}/${yearMonth}/check`);
+        const checkJson = await checkRes.json();
+        if (checkJson.code === 0 && checkJson.data?.canReadFromDb) {
+          console.log(`[fetchCompanyData] 📦 从数据库读取历史月份数据: ${yearMonth}`);
+          const dbRes = await fetch(`http://localhost:5001/api/v1/sync/month-data/${companyId}/${yearMonth}`);
+          const dbJson = await dbRes.json();
+          if (dbJson.code === 0 && dbJson.data?.employees?.length > 0) {
+            const result = {
+              employees: dbJson.data.employees as DingTalkUser[],
+              companyCounts: dbJson.data.companyCounts as CompanyCounts,
+            };
+            await SmartCache.set(cacheKey, result);
+            return result;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('[fetchCompanyData] 从数据库读取失败，回退到钉钉API:', dbErr);
+      }
+    }
+
     // console.log(`[fetchCompanyData] 🔄 缓存未命中，开始新的API请求: ${cacheKey}`);
     
     // 2. 创建新的请求Promise
@@ -1196,7 +1231,7 @@ export const fetchCompanyData = async (mainCompany: string, fromDate: string, to
         const doFetch = async (forceRefresh = false) => {
             const accessToken = await dingTalkTokenManager.getToken(mainCompany, forceRefresh);
 
-            const employeesResponse = await fetch("http://10.10.88.135:5001/etl/dingding/employees", {
+            const employeesResponse = await fetch("http://localhost:5001/etl/dingding/employees", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ dingToken: accessToken }),
             });
@@ -1218,7 +1253,7 @@ export const fetchCompanyData = async (mainCompany: string, fromDate: string, to
                 department: e.department
             }));
 
-            const punchResponse = await fetch("http://10.10.88.135:5001/etl/dingding/punch", {
+            const punchResponse = await fetch("http://localhost:5001/etl/dingding/punch", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -1303,7 +1338,7 @@ export const fetchProcessDetail = async (procInstId: string, mainCompany: string
         const company = (mainCompany?.includes('海多多') || mainCompany === 'hydodo') ? 'hydodo' : 'eyewind';
         const accessToken = await dingTalkTokenManager.getToken(company);
 
-        const response = await fetch(`http://10.10.88.135:5001/etl/dingding/processInstances/${procInstId}`, {
+        const response = await fetch(`http://localhost:5001/etl/dingding/processInstances/${procInstId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ dingToken: accessToken })

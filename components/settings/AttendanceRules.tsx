@@ -20,18 +20,21 @@ const RULE_CATEGORIES: { key: RuleCategory; label: string; icon: string; descrip
     { key: 'special', label: '特殊规则', icon: '⚡', description: '调班、居家办公、请假展示等特殊规则', activeColor: 'bg-purple-500' },
 ];
 
-export const AttendanceRulesPage: React.FC = () => {
+export const AttendanceRulesPage: React.FC<{ currentCompany?: string }> = ({ currentCompany: propCurrentCompany }) => {
     // 🔥 修复说明：
     // 1. 添加了 hasInitialized 和 isCurrentlyLoading 状态来防止重复API调用
     // 2. 使用 isMountedRef 来防止组件卸载后的状态更新
     // 3. 将 loadConfigFromDatabase 包装为 useCallback，避免useEffect重复执行
     // 4. 在所有状态更新前检查组件是否仍然挂载
     // 5. 优化了 useEffect 依赖项和执行条件
+    // 6. 🔥 新增：接收 currentCompany 参数，自动同步全局公司切换状态
     
     // We store the full config object in local storage
     const [storedConfigs, setStoredConfigs] = useLocalStorage<CompanyConfigs>(CONFIG_KEY, DEFAULT_CONFIGS);
 
-    const [selectedCompany, setSelectedCompany] = useState<'eyewind' | 'hydodo'>('eyewind');
+    // 🔥 修复：使用传入的 currentCompany 作为初始值，如果没有传入则默认为 'eyewind'
+    const initialCompany = (propCurrentCompany === 'hydodo' ? 'hydodo' : 'eyewind') as 'eyewind' | 'hydodo';
+    const [selectedCompany, setSelectedCompany] = useState<'eyewind' | 'hydodo'>(initialCompany);
     const [selectedCategory, setSelectedCategory] = useState<RuleCategory>('global'); // 当前选中的分类
 
     const [formData, setFormData] = useState({
@@ -64,6 +67,18 @@ export const AttendanceRulesPage: React.FC = () => {
             isMountedRef.current = false;
         };
     }, []);
+
+    // 🔥 新增：监听全局 currentCompany 变化，自动同步到本地状态
+    useEffect(() => {
+        if (propCurrentCompany) {
+            const newCompany = (propCurrentCompany === 'hydodo' ? 'hydodo' : 'eyewind') as 'eyewind' | 'hydodo';
+            if (newCompany !== selectedCompany) {
+                console.log(`[AttendanceRules] 🔄 全局公司切换: ${selectedCompany} -> ${newCompany}`);
+                setSelectedCompany(newCompany);
+                setHasChanges(false); // 切换公司时重置修改状态
+            }
+        }
+    }, [propCurrentCompany]);
 
     // 各模块手风琴展开状态
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['workSchedule', 'attendanceDays', 'workdaySwap', 'remoteWork', 'lateRules', 'flexibility', 'fullAttendance', 'performance', 'overtime', 'crossDay', 'crossWeek', 'crossMonth', 'leaveDisplay']));
@@ -928,20 +943,23 @@ ${performanceRulesDesc}`
                     </div>
                 </div>
                 <div className="flex items-center gap-3">
-                    <div className="flex gap-2 bg-white dark:bg-slate-800 p-1 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <button
-                            onClick={() => setSelectedCompany('eyewind')}
-                            className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${selectedCompany === 'eyewind' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
-                        >
-                            风眼 (Eyewind)
-                        </button>
-                        <button
-                            onClick={() => setSelectedCompany('hydodo')}
-                            className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${selectedCompany === 'hydodo' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
-                        >
-                            海多多 (Hydodo)
-                        </button>
-                    </div>
+                    {/* 🔥 只有在没有传入全局公司参数时才显示公司切换按钮 */}
+                    {!propCurrentCompany && (
+                        <div className="flex gap-2 bg-white dark:bg-slate-800 p-1 rounded-lg border border-slate-200 dark:border-slate-700">
+                            <button
+                                onClick={() => setSelectedCompany('eyewind')}
+                                className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${selectedCompany === 'eyewind' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+                            >
+                                风眼 (Eyewind)
+                            </button>
+                            <button
+                                onClick={() => setSelectedCompany('hydodo')}
+                                className={`px-4 py-2 rounded-md text-sm font-semibold transition-colors ${selectedCompany === 'hydodo' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+                            >
+                                海多多 (Hydodo)
+                            </button>
+                        </div>
+                    )}
                     <button
                         onClick={loadConfigFromDatabase}
                         disabled={isLoadingConfig}
@@ -1980,6 +1998,41 @@ ${performanceRulesDesc}`
                                     <button onClick={addLateRule} className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg border border-dashed border-red-300 transition-colors">
                                         <PlusCircleIcon className="w-4 h-4" /> 添加迟到规则
                                     </button>
+                                    
+                                    {/* 🔥 默认迟到阈值时间配置 */}
+                                    <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800/50">
+                                        <div className="flex items-start gap-3">
+                                            <InfoIcon className="w-5 h-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                                            <div className="flex-1">
+                                                <h4 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200 mb-2">默认迟到阈值时间（可选）</h4>
+                                                <p className="text-xs text-yellow-700 dark:text-yellow-300 mb-3">
+                                                    当上述迟到规则都不匹配时，使用此时间作为迟到判定基准。如果不设置，则使用"工作开始时间"。
+                                                </p>
+                                                <div className="flex items-center gap-3">
+                                                    <input
+                                                        type="time"
+                                                        value={formData.rules.defaultLateThresholdTime || ''}
+                                                        onChange={e => updateRule('defaultLateThresholdTime', e.target.value || undefined)}
+                                                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-yellow-300 dark:border-yellow-700 rounded-lg text-sm font-mono"
+                                                        placeholder="HH:MM"
+                                                    />
+                                                    {formData.rules.defaultLateThresholdTime && (
+                                                        <button
+                                                            onClick={() => updateRule('defaultLateThresholdTime', undefined)}
+                                                            className="text-xs text-yellow-600 hover:text-yellow-800 dark:text-yellow-400 dark:hover:text-yellow-200"
+                                                        >
+                                                            清除
+                                                        </button>
+                                                    )}
+                                                    <span className="text-xs text-yellow-600 dark:text-yellow-400">
+                                                        {formData.rules.defaultLateThresholdTime 
+                                                            ? `超过 ${formData.rules.defaultLateThresholdTime} 算迟到` 
+                                                            : `使用工作开始时间 ${formData.rules.workStartTime}`}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             )}
                         </div>

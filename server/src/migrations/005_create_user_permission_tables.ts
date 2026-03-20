@@ -64,26 +64,29 @@ export async function up(knex: Knex): Promise<void> {
       name: '超级管理员',
       description: '拥有系统所有权限',
       permissions: JSON.stringify([
+        // 员工列表
+        'employee_list:view', 'employee_list:detail', 'employee_list:sync', 'employee_list:filter',
+        'employee_list:edit', 'employee_list:delete', 'employee_list:export',
+        // 考勤仪表盘
+        'attendance_dashboard:view', 'attendance_dashboard:statistics', 'attendance_dashboard:ranking',
+        'attendance_dashboard:charts', 'attendance_dashboard:calendar_view', 'attendance_dashboard:calendar_edit',
+        'attendance_dashboard:ai_analysis', 'attendance_dashboard:export', 'attendance_dashboard:preview',
+        'attendance_dashboard:custom_download', 'attendance_dashboard:push_report', 'attendance_dashboard:create_verification',
         // 考勤确认
         'attendance_verification:view', 'attendance_verification:create', 'attendance_verification:edit',
         'attendance_verification:send', 'attendance_verification:recall', 'attendance_verification:archive',
         'attendance_verification:delete', 'attendance_verification:export',
-        // 考勤仪表盘
-        'attendance_dashboard:view', 'attendance_dashboard:export', 'attendance_dashboard:calendar_view',
-        'attendance_dashboard:calendar_edit', 'attendance_dashboard:ai_analysis', 'attendance_dashboard:statistics',
-        'attendance_dashboard:charts',
-        // 员工列表
-        'employee_list:view', 'employee_list:sync', 'employee_list:edit', 'employee_list:delete', 'employee_list:export',
         // 考勤规则
-        'attendance_rules:view', 'attendance_rules:edit', 'attendance_rules:create', 'attendance_rules:delete',
+        'attendance_rules:view', 'attendance_rules:edit', 'attendance_rules:create',
+        'attendance_rules:delete', 'attendance_rules:test',
+        // 账号管理
+        'admin:users', 'admin:roles',
+        // 参数管理
+        'params:view', 'params:edit',
+        // 模型管理
+        'model:view', 'model:edit', 'model:test', 'model:delete',
         // 日志管理
-        'logs:view', 'logs:export', 'logs:delete', 'logs:statistics',
-        // 系统管理
-        'admin:users', 'admin:roles', 'admin:settings', 'admin:backup', 'admin:restore',
-        // 钉钉集成
-        'dingtalk:config', 'dingtalk:sync_employees', 'dingtalk:sync_attendance', 'dingtalk:send_notification',
-        // 数据导入导出
-        'data:import', 'data:export', 'data:batch_operation'
+        'logs:view', 'logs:filter', 'logs:statistics', 'logs:export', 'logs:delete'
       ]),
       is_system: true,
       created_at: knex.fn.now(),
@@ -94,24 +97,22 @@ export async function up(knex: Knex): Promise<void> {
       name: '人事经理',
       description: '负责考勤全流程管理，拥有编辑权限',
       permissions: JSON.stringify([
+        // 员工列表
+        'employee_list:view', 'employee_list:detail', 'employee_list:sync', 'employee_list:filter',
+        'employee_list:edit', 'employee_list:export',
+        // 考勤仪表盘
+        'attendance_dashboard:view', 'attendance_dashboard:statistics', 'attendance_dashboard:ranking',
+        'attendance_dashboard:charts', 'attendance_dashboard:calendar_view', 'attendance_dashboard:calendar_edit',
+        'attendance_dashboard:ai_analysis', 'attendance_dashboard:export', 'attendance_dashboard:preview',
+        'attendance_dashboard:custom_download', 'attendance_dashboard:push_report', 'attendance_dashboard:create_verification',
         // 考勤确认
         'attendance_verification:view', 'attendance_verification:create', 'attendance_verification:edit',
         'attendance_verification:send', 'attendance_verification:recall', 'attendance_verification:archive',
         'attendance_verification:export',
-        // 考勤仪表盘
-        'attendance_dashboard:view', 'attendance_dashboard:export', 'attendance_dashboard:calendar_view',
-        'attendance_dashboard:calendar_edit', 'attendance_dashboard:ai_analysis', 'attendance_dashboard:statistics',
-        'attendance_dashboard:charts',
-        // 员工列表
-        'employee_list:view', 'employee_list:sync', 'employee_list:edit', 'employee_list:export',
         // 考勤规则
         'attendance_rules:view', 'attendance_rules:edit',
         // 日志管理
-        'logs:view', 'logs:export', 'logs:statistics',
-        // 钉钉集成
-        'dingtalk:sync_employees', 'dingtalk:sync_attendance', 'dingtalk:send_notification',
-        // 数据导入导出
-        'data:import', 'data:export', 'data:batch_operation'
+        'logs:view', 'logs:filter', 'logs:statistics', 'logs:export'
       ]),
       is_system: true,
       created_at: knex.fn.now(),
@@ -122,17 +123,18 @@ export async function up(knex: Knex): Promise<void> {
       name: '财务专员',
       description: '仅能查看和下载数据，无编辑权限',
       permissions: JSON.stringify([
+        // 员工列表
+        'employee_list:view', 'employee_list:detail', 'employee_list:filter', 'employee_list:export',
+        // 考勤仪表盘
+        'attendance_dashboard:view', 'attendance_dashboard:statistics', 'attendance_dashboard:ranking',
+        'attendance_dashboard:charts', 'attendance_dashboard:calendar_view', 'attendance_dashboard:export',
+        'attendance_dashboard:preview', 'attendance_dashboard:custom_download',
         // 考勤确认
         'attendance_verification:view', 'attendance_verification:export',
-        // 考勤仪表盘
-        'attendance_dashboard:view', 'attendance_dashboard:export', 'attendance_dashboard:calendar_view',
-        'attendance_dashboard:statistics', 'attendance_dashboard:charts',
-        // 员工列表
-        'employee_list:view', 'employee_list:export',
         // 考勤规则
         'attendance_rules:view',
-        // 数据导入导出
-        'data:export'
+        // 日志管理
+        'logs:view', 'logs:filter'
       ]),
       is_system: true,
       created_at: knex.fn.now(),
@@ -143,13 +145,13 @@ export async function up(knex: Knex): Promise<void> {
       name: '考勤专员',
       description: '仅能查看和编辑数据，无法发送通知或导出',
       permissions: JSON.stringify([
+        // 员工列表
+        'employee_list:view', 'employee_list:detail', 'employee_list:filter', 'employee_list:edit',
+        // 考勤仪表盘
+        'attendance_dashboard:view', 'attendance_dashboard:statistics', 'attendance_dashboard:calendar_view',
+        'attendance_dashboard:calendar_edit', 'attendance_dashboard:create_verification',
         // 考勤确认
         'attendance_verification:view', 'attendance_verification:create', 'attendance_verification:edit',
-        // 考勤仪表盘
-        'attendance_dashboard:view', 'attendance_dashboard:calendar_view', 'attendance_dashboard:calendar_edit',
-        'attendance_dashboard:statistics',
-        // 员工列表
-        'employee_list:view', 'employee_list:edit',
         // 考勤规则
         'attendance_rules:view'
       ]),

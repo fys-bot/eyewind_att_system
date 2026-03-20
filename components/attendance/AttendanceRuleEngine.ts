@@ -407,12 +407,22 @@ export class AttendanceRuleEngine {
     }
 
     /**
-     * 计算默认迟到分钟数（使用标准工作开始时间）
+     * 计算默认迟到分钟数（使用标准工作开始时间或默认迟到阈值时间）
      */
     private calculateDefaultLateMinutes(checkInTime: Date, workDate: Date, processDetail?: any): number {
         let workStartTime = new Date(workDate);
-        const [startHour, startMinute] = this.rules.workStartTime.split(':').map(Number);
-        workStartTime.setHours(startHour, startMinute, 0, 0);
+        
+        // 🔥 优先使用 defaultLateThresholdTime（如果配置了）
+        if (this.rules.defaultLateThresholdTime) {
+            const [thresholdHour, thresholdMinute] = this.rules.defaultLateThresholdTime.split(':').map(Number);
+            workStartTime.setHours(thresholdHour, thresholdMinute, 0, 0);
+            console.log(`[AttendanceRuleEngine] ✅ 使用 defaultLateThresholdTime: ${this.rules.defaultLateThresholdTime}, 公司: ${this.companyKey}`);
+        } else {
+            // 否则使用标准工作开始时间
+            const [startHour, startMinute] = this.rules.workStartTime.split(':').map(Number);
+            workStartTime.setHours(startHour, startMinute, 0, 0);
+            console.log(`[AttendanceRuleEngine] ⚠️ 使用 workStartTime: ${this.rules.workStartTime}, 公司: ${this.companyKey} (未配置 defaultLateThresholdTime)`);
+        }
 
         // 🔥 新增：如果有请假/调休，检查请假结束时间
         if (processDetail && processDetail.formValues) {
@@ -431,9 +441,9 @@ export class AttendanceRuleEngine {
         const lateMinutes = Math.max(0, Math.floor((checkInTime.getTime() - workStartTime.getTime()) / 60000));
         
         // 🔥 调试：记录默认规则计算结果
-        // if (lateMinutes > 0) {
-        //     console.log(`[AttendanceRuleEngine] 使用默认规则: 工作开始时间${this.rules.workStartTime}, 迟到${lateMinutes}分钟`);
-        // }
+        if (lateMinutes > 0) {
+            console.log(`[AttendanceRuleEngine] 计算结果: 打卡时间 ${checkInTime.toLocaleTimeString('zh-CN')}, 基准时间 ${workStartTime.toLocaleTimeString('zh-CN')}, 迟到 ${lateMinutes} 分钟`);
+        }
         
         return lateMinutes;
     }
@@ -600,6 +610,28 @@ export class AttendanceRuleEngine {
     public calculatePerformancePenalty(exemptedLateMinutes: number): number {
         if (exemptedLateMinutes <= 0) return 0;
 
+        // 🔥 检查绩效扣款模式
+        const penaltyMode = this.rules.performancePenaltyMode || 'capped';
+        
+        // 🔥 上不封顶模式
+        if (penaltyMode === 'unlimited') {
+            const calcType = this.rules.unlimitedPenaltyCalcType || 'fixed';
+            
+            if (calcType === 'perMinute') {
+                // 按分钟计算：每分钟N元
+                const perMinute = this.rules.unlimitedPenaltyPerMinute || 5;
+                const penalty = exemptedLateMinutes * perMinute;
+                console.log(`[calculatePerformancePenalty] 上不封顶-按分钟，豁免后迟到${exemptedLateMinutes}分钟 × ${perMinute}元/分钟 = ${penalty}元`);
+                return penalty;
+            } else {
+                // 固定金额：只要迟到就扣固定金额
+                const fixedAmount = this.rules.unlimitedPenaltyFixedAmount || 50;
+                console.log(`[calculatePerformancePenalty] 上不封顶-固定金额，豁免后迟到${exemptedLateMinutes}分钟 → 扣款${fixedAmount}元`);
+                return fixedAmount;
+            }
+        }
+
+        // 🔥 封顶模式（原有逻辑）
         // 使用新的灵活扣款规则
         if (this.rules.performancePenaltyRules && this.rules.performancePenaltyRules.length > 0) {
             // 按照 minMinutes 从小到大排序
@@ -630,7 +662,7 @@ export class AttendanceRuleEngine {
                 const penalty = Math.min(matchedRule.penalty, this.rules.maxPerformancePenalty);
                 
                 // 🔥 调试日志：记录匹配的规则
-                console.log(`[calculatePerformancePenalty] 豁免后迟到${exemptedLateMinutes}分钟，匹配规则: [${matchedRule.minMinutes}, ${matchedRule.maxMinutes}) → ${matchedRule.penalty}元，最终扣款: ${penalty}元`);
+                console.log(`[calculatePerformancePenalty] 封顶模式，豁免后迟到${exemptedLateMinutes}分钟，匹配规则: [${matchedRule.minMinutes}, ${matchedRule.maxMinutes}) → ${matchedRule.penalty}元，最终扣款: ${penalty}元`);
                 
                 return penalty;
             } else {

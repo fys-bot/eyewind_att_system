@@ -26,14 +26,14 @@ export const AttendancePhonePreview = React.forwardRef<HTMLDivElement, {
         if (column === '序号') return rec.employeeId;
         if (column === '姓名') return rec.employeeName;
         
-        // 🔥 优先使用真实的考勤数据，避免显示默认的"√"
-        const value = rec.dailyData.dailyData[column];
+        // 🔥 dailyData 是一个扁平的 Record<string, string>，直接访问
+        const value = rec.dailyData?.[column];
         
         // 🔥 如果是日期列且没有数据，显示"-"而不是默认的"√"
         if (/^\d+$/.test(column) && (!value || value === '√')) {
             // 检查是否有真实的考勤数据
-            const hasRealData = Object.keys(rec.dailyData.dailyData).some(key => 
-                /^\d+$/.test(key) && rec.dailyData.dailyData[key] && rec.dailyData.dailyData[key] !== '√'
+            const hasRealData = Object.keys(rec.dailyData || {}).some(key => 
+                /^\d+$/.test(key) && rec.dailyData[key] && rec.dailyData[key] !== '√'
             );
             
             // 如果有真实数据但当前日期没有，显示"-"

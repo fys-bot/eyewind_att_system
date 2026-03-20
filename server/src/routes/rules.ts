@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ruleService } from '../services/ruleService';
 import type { CompanyId, ApiResponse } from '../types/index';
+import { logApiRequest, logDbQuery, logApiResponse, logError, getDataStructure } from '../utils/logger';
 
 const router = Router();
 
@@ -11,10 +12,14 @@ const validateCompanyId = (companyId: string): companyId is CompanyId => {
 
 // GET /api/v1/attendance/rules/:companyId - 获取公司完整配置
 router.get('/:companyId', async (req: Request, res: Response) => {
+  const startTime = Date.now();
   try {
     const { companyId } = req.params;
     
+    logApiRequest('/api/v1/attendance/rules/:companyId', 'GET', { companyId });
+    
     if (!validateCompanyId(companyId)) {
+      logError('无效的公司ID', new Error('Invalid companyId'), { companyId });
       return res.status(400).json({
         code: 40003,
         message: '无效的公司ID，必须是 eyewind 或 hydodo',
@@ -22,20 +27,26 @@ router.get('/:companyId', async (req: Request, res: Response) => {
     }
 
     const config = await ruleService.getFullConfig(companyId);
+    const duration = Date.now() - startTime;
     
     if (!config) {
+      logError('配置不存在', new Error('Config not found'), { companyId, duration });
       return res.status(404).json({
         code: 40001,
         message: '配置不存在',
       } as ApiResponse);
     }
 
+    logDbQuery('getFullConfig', 1, `companyId=${companyId}, version=${config.version}`, duration);
+    logApiResponse('/api/v1/attendance/rules', 200, 1, duration);
+
     res.json({
       code: 0,
       data: config,
     } as ApiResponse);
   } catch (error) {
-    console.error('获取配置失败:', error);
+    const duration = Date.now() - startTime;
+    logError('获取配置失败', error, { duration });
     res.status(500).json({
       code: 50000,
       message: '服务器内部错误',
@@ -45,11 +56,19 @@ router.get('/:companyId', async (req: Request, res: Response) => {
 
 // PUT /api/v1/attendance/rules/:companyId - 更新完整配置
 router.put('/:companyId', async (req: Request, res: Response) => {
+  const startTime = Date.now();
   try {
     const { companyId } = req.params;
     const updatedBy = req.headers['x-user-id'] as string || 'anonymous';
     
+    logApiRequest('/api/v1/attendance/rules/:companyId', 'PUT', { companyId }, undefined, { 
+      updatedBy,
+      hasRules: !!req.body.rules,
+      changeReason: req.body.changeReason
+    });
+    
     if (!validateCompanyId(companyId)) {
+      logError('无效的公司ID', new Error('Invalid companyId'), { companyId });
       return res.status(400).json({
         code: 40003,
         message: '无效的公司ID',
@@ -59,6 +78,10 @@ router.put('/:companyId', async (req: Request, res: Response) => {
     // 新服务接受前端格式的 rules 对象
     const { rules, changeReason } = req.body;
     const result = await ruleService.updateFullConfig(companyId, rules, updatedBy, changeReason);
+    const duration = Date.now() - startTime;
+
+    logDbQuery('updateFullConfig', 1, `companyId=${companyId}, version=${result.version}`, duration);
+    logApiResponse('/api/v1/attendance/rules', 200, 1, duration);
 
     res.json({
       code: 0,
@@ -69,7 +92,8 @@ router.put('/:companyId', async (req: Request, res: Response) => {
       },
     } as ApiResponse);
   } catch (error: any) {
-    console.error('更新配置失败:', error);
+    const duration = Date.now() - startTime;
+    logError('更新配置失败', error, { duration });
     
     if (error.message === '配置不存在') {
       return res.status(404).json({

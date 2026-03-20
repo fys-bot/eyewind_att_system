@@ -13,6 +13,9 @@ interface AttendanceStatsTableProps {
     performancePenaltyEnabled?: boolean; // 新增：是否启用绩效考核功能
 }
 
+// 格式化小时数，避免浮点精度问题
+const fmtHours = (v: number | undefined) => v ? (Math.round(v * 100) / 100) + ' 小时' : '-';
+
 // 样式辅助函数：用于非零值突出显示 (主要用于风险/假期类)
 const getCellClass = (value: number | string | undefined, color: string) => {
     if (value && (typeof value === 'number' ? value > 0 : parseInt(value as string) > 0)) {
@@ -318,16 +321,16 @@ export const AttendanceStatsTable: React.FC<AttendanceStatsTableProps> = ({ empl
                                     <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass((stats as any).absenteeism, 'amber')}`}>{(stats as any).absenteeism || '-'}</td>
 
                                     {/* 假期 */}
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.compTimeHours, 'green')}`}>{stats.compTimeHours ? stats.compTimeHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.personalHours, 'green')}`}>{stats.personalHours ? stats.personalHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.sickHours, 'green')}`}>{stats.sickHours ? stats.sickHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.seriousSickHours, 'green')}`}>{stats.seriousSickHours ? stats.seriousSickHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.annualHours, 'green')}`}>{stats.annualHours ? stats.annualHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.marriageHours, 'green')}`}>{stats.marriageHours ? stats.marriageHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.maternityHours, 'green')}`}>{stats.maternityHours ? stats.maternityHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.paternityHours, 'green')}`}>{stats.paternityHours ? stats.paternityHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.parentalHours, 'green')}`}>{stats.parentalHours ? stats.parentalHours + ' 小时' : '-'}</td>
-                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.bereavementHours, 'green')}`}>{stats.bereavementHours ? stats.bereavementHours + ' 小时' : '-'}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.compTimeHours, 'green')}`}>{fmtHours(stats.compTimeHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.personalHours, 'green')}`}>{fmtHours(stats.personalHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.sickHours, 'green')}`}>{fmtHours(stats.sickHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.seriousSickHours, 'green')}`}>{fmtHours(stats.seriousSickHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.annualHours, 'green')}`}>{fmtHours(stats.annualHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.marriageHours, 'green')}`}>{fmtHours(stats.marriageHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.maternityHours, 'green')}`}>{fmtHours(stats.maternityHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.paternityHours, 'green')}`}>{fmtHours(stats.paternityHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.parentalHours, 'green')}`}>{fmtHours(stats.parentalHours)}</td>
+                                    <td className={`px-3 py-3 text-center whitespace-nowrap border-b border-r border-slate-200 dark:border-slate-700 ${getCellClass(stats.bereavementHours, 'green')}`}>{fmtHours(stats.bereavementHours)}</td>
 
                                     {/* 加班 */}
                                     <td className={getOvertimeCellClass(stats.overtime19_5Minutes, 'blue')}>

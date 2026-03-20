@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
-import { PlusIcon, PencilIcon, TrashIcon, CheckIcon } from '../Icons.tsx';
+import React, { useState, useEffect, useMemo } from 'react';
+import { PlusIcon, PencilIcon, TrashIcon, CheckIcon, SearchIcon, XIcon } from '../Icons.tsx';
 import { Modal } from '../Modal.tsx';
 import * as roleApi from '../../services/roleApiService.ts';
 
@@ -14,6 +14,9 @@ export const RoleManagement: React.FC = () => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingRole, setEditingRole] = useState<roleApi.Role | null>(null);
     const [formData, setFormData] = useState<{ name: string; description: string; permissions: string[] }>({ name: '', description: '', permissions: [] });
+    
+    // 🔥 搜索功能
+    const [searchQuery, setSearchQuery] = useState('');
 
     // 加载角色列表
     const loadRoles = async () => {
@@ -48,12 +51,14 @@ export const RoleManagement: React.FC = () => {
     const handleEdit = (role: roleApi.Role) => {
         setEditingRole(role);
         setFormData({ name: role.name, description: role.description, permissions: role.permissions || [] });
+        setSearchQuery(''); // 🔥 重置搜索
         setIsModalOpen(true);
     };
 
     const handleCreate = () => {
         setEditingRole(null);
         setFormData({ name: '', description: '', permissions: [] });
+        setSearchQuery(''); // 🔥 重置搜索
         setIsModalOpen(true);
     };
 
@@ -116,6 +121,34 @@ export const RoleManagement: React.FC = () => {
             alert(err instanceof Error ? err.message : '保存角色失败');
         }
     };
+    
+    // 🔥 过滤权限（根据搜索关键词）
+    const filteredPermissions = useMemo(() => {
+        if (!searchQuery.trim()) return allPermissions;
+        
+        const query = searchQuery.toLowerCase();
+        const filtered: roleApi.PermissionsMap = {};
+        
+        Object.entries(allPermissions).forEach(([moduleName, perms]) => {
+            const matchedPerms: { [key: string]: string } = {};
+            
+            // 检查模块名是否匹配
+            const moduleMatches = moduleName.toLowerCase().includes(query);
+            
+            Object.entries(perms).forEach(([key, label]) => {
+                // 如果模块名匹配，或者权限标签匹配，则包含该权限
+                if (moduleMatches || label.toLowerCase().includes(query)) {
+                    matchedPerms[key] = label;
+                }
+            });
+            
+            if (Object.keys(matchedPerms).length > 0) {
+                filtered[moduleName] = matchedPerms;
+            }
+        });
+        
+        return filtered;
+    }, [allPermissions, searchQuery]);
 
     return (
         <div className="space-y-4">
@@ -187,56 +220,93 @@ export const RoleManagement: React.FC = () => {
                     </div>
 
                     <div>
-                        <h4 className="text-sm font-bold text-slate-900 dark:text-white mb-3 pb-2 border-b border-slate-100 dark:border-slate-700">权限配置</h4>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-6 gap-x-8 max-h-[400px] overflow-y-auto pr-2">
-                            {Object.entries(allPermissions).map(([moduleName, perms]) => {
-                                const modulePermKeys = Object.keys(perms);
-                                const selectedCount = modulePermKeys.filter(k => formData.permissions.includes(k)).length;
-                                const isAllSelected = selectedCount === modulePermKeys.length;
-                                const isIndeterminate = selectedCount > 0 && !isAllSelected;
+                        <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100 dark:border-slate-700">
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-white">权限配置</h4>
+                            <div className="text-xs text-slate-500 dark:text-slate-400">
+                                已选 <span className="font-semibold text-sky-600 dark:text-sky-400">{formData.permissions.length}</span> 项
+                            </div>
+                        </div>
+                        
+                        {/* 🔥 搜索框 */}
+                        <div className="relative mb-4">
+                            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="搜索权限..."
+                                className="w-full pl-10 pr-10 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                            />
+                            {searchQuery && (
+                                <button
+                                    onClick={() => setSearchQuery('')}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                                >
+                                    <XIcon className="w-4 h-4" />
+                                </button>
+                            )}
+                        </div>
+                        
+                        {/* 🔥 优化后的权限列表 */}
+                        <div className="space-y-4 max-h-[450px] overflow-y-auto pr-2">
+                            {Object.keys(filteredPermissions).length === 0 ? (
+                                <div className="text-center py-8 text-slate-400 dark:text-slate-500">
+                                    <SearchIcon className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                                    <p className="text-sm">未找到匹配的权限</p>
+                                </div>
+                            ) : (
+                                Object.entries(filteredPermissions).map(([moduleName, perms]) => {
+                                    const modulePermKeys = Object.keys(perms);
+                                    const selectedCount = modulePermKeys.filter(k => formData.permissions.includes(k)).length;
+                                    const isAllSelected = selectedCount === modulePermKeys.length;
+                                    const isIndeterminate = selectedCount > 0 && !isAllSelected;
 
-                                return (
-                                    <div key={moduleName} className="space-y-2">
-                                        <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-slate-700">
-                                            <h5 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">{moduleName}</h5>
-                                            <label className="flex items-center gap-1.5 cursor-pointer">
-                                                <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${isAllSelected || isIndeterminate ? 'bg-sky-500 border-sky-500' : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600'}`}>
-                                                    {isAllSelected && <CheckIcon className="w-2.5 h-2.5 text-white" />}
-                                                    {isIndeterminate && <div className="w-2 h-0.5 bg-white rounded-full" />}
-                                                </div>
-                                                <input 
-                                                    type="checkbox" 
-                                                    className="hidden" 
-                                                    checked={isAllSelected} 
-                                                    onChange={() => toggleModulePermissions(moduleName, isAllSelected)}
-                                                />
-                                                <span className="text-[10px] text-slate-400 select-none">全选</span>
-                                            </label>
+                                    return (
+                                        <div key={moduleName} className="bg-slate-50 dark:bg-slate-900/50 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
+                                            {/* 模块标题 */}
+                                            <div className="flex items-center justify-between mb-3">
+                                                <h5 className="text-sm font-bold text-slate-700 dark:text-slate-300">{moduleName}</h5>
+                                                <label className="flex items-center gap-2 cursor-pointer group">
+                                                    <span className="text-xs text-slate-500 dark:text-slate-400 group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors">全选</span>
+                                                    <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${isAllSelected || isIndeterminate ? 'bg-sky-500 border-sky-500' : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 group-hover:border-sky-400'}`}>
+                                                        {isAllSelected && <CheckIcon className="w-3 h-3 text-white" />}
+                                                        {isIndeterminate && <div className="w-2 h-0.5 bg-white rounded-full" />}
+                                                    </div>
+                                                    <input 
+                                                        type="checkbox" 
+                                                        className="hidden" 
+                                                        checked={isAllSelected} 
+                                                        onChange={() => toggleModulePermissions(moduleName, isAllSelected)}
+                                                    />
+                                                </label>
+                                            </div>
+                                            
+                                            {/* 权限列表 - 使用网格布局 */}
+                                            <div className="grid grid-cols-1 gap-1.5">
+                                                {Object.entries(perms).map(([key, label]) => {
+                                                    const isChecked = formData.permissions.includes(key);
+                                                    return (
+                                                        <label key={key} className="flex items-center gap-2.5 p-2 rounded-md hover:bg-white dark:hover:bg-slate-800 cursor-pointer group transition-colors">
+                                                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-all ${isChecked ? 'bg-sky-500 border-sky-500' : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 group-hover:border-sky-400'}`}>
+                                                                {isChecked && <CheckIcon className="w-3 h-3 text-white" />}
+                                                            </div>
+                                                            <input 
+                                                                type="checkbox" 
+                                                                className="hidden" 
+                                                                checked={isChecked} 
+                                                                onChange={() => togglePermission(key)}
+                                                            />
+                                                            <span className={`text-sm flex-1 ${isChecked ? 'text-slate-900 dark:text-white font-medium' : 'text-slate-600 dark:text-slate-400'}`}>
+                                                                {label}
+                                                            </span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
-                                        <div className="space-y-1">
-                                            {Object.entries(perms).map(([key, label]) => {
-                                                const isChecked = formData.permissions.includes(key);
-                                                return (
-                                                    <label key={key} className="flex items-center gap-2 p-2 rounded hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer group transition-colors">
-                                                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${isChecked ? 'bg-sky-500 border-sky-500' : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 group-hover:border-sky-400'}`}>
-                                                            {isChecked && <CheckIcon className="w-3 h-3 text-white" />}
-                                                        </div>
-                                                        <input 
-                                                            type="checkbox" 
-                                                            className="hidden" 
-                                                            checked={isChecked} 
-                                                            onChange={() => togglePermission(key)}
-                                                        />
-                                                        <span className={`text-sm ${isChecked ? 'text-slate-900 dark:text-white font-medium' : 'text-slate-600 dark:text-slate-400'}`}>
-                                                            {label}
-                                                        </span>
-                                                    </label>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                );
-                            })}
+                                    );
+                                })
+                            )}
                         </div>
                     </div>
 

@@ -60,6 +60,7 @@ export interface AttendanceRuleConfig {
     
     // 迟到规则
     lateRules: LateRule[]; // 支持多种迟到判定规则
+    defaultLateThresholdTime?: string; // "09:16" (默认迟到阈值时间，当迟到规则不匹配时使用此时间)
     lateExemptionCount: number; // 3 (月度豁免次数)
     lateExemptionMinutes: number; // 15 (单次豁免时长)
     lateExemptionEnabled: boolean; // true (是否启用豁免功能)

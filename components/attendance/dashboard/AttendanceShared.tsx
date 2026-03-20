@@ -20,22 +20,37 @@ export const Avatar: React.FC<{ name: string; avatarUrl?: string; size?: 'sm' | 
     return <div className={`rounded-full flex items-center justify-center ${color} text-white font-bold flex-shrink-0 ${sizeClasses}`}>{initial}</div>;
 };
 
-export const AccordionSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean; isSticky?: boolean; }> = ({ title, icon, children, defaultOpen = true, isSticky = false }) => {
-    const [isOpen, setIsOpen] = useState(defaultOpen);
+export const AccordionSection: React.FC<{ title: string; icon: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean; isSticky?: boolean; isOpen?: boolean; onToggle?: (open: boolean) => void; headerExtra?: React.ReactNode; }> = ({ title, icon, children, defaultOpen = true, isSticky = false, isOpen: controlledIsOpen, onToggle, headerExtra }) => {
+    const [internalOpen, setInternalOpen] = useState(defaultOpen);
+    const isOpen = controlledIsOpen !== undefined ? controlledIsOpen : internalOpen;
+    const handleToggle = () => {
+        const next = !isOpen;
+        if (onToggle) onToggle(next);
+        if (controlledIsOpen === undefined) setInternalOpen(next);
+    };
     return (
-        <div className={`border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 overflow-hidden mt-6 shadow-sm ${isSticky ? 'sticky top-0 z-30' : ''}`}>
-            <button
-                onClick={() => setIsOpen(!isOpen)}
-                className="w-full flex justify-between items-center p-4 text-left bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
-            >
-                <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-3">
-                    {icon} {title}
-                </h3>
-                <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+        <div className="border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 overflow-hidden mt-6 shadow-sm">
+            <div className={`flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800/50 ${isSticky ? 'sticky top-0 z-30 rounded-t-lg' : ''}`}>
+                <div className="flex-1 flex items-center gap-3 min-w-0">
+                    <button
+                        onClick={handleToggle}
+                        className="flex items-center gap-3 text-left hover:opacity-80 transition-opacity"
+                    >
+                        <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-3 whitespace-nowrap">
+                            {icon} {title}
+                        </h3>
+                    </button>
+                    {headerExtra && (
+                        <div className="flex items-center" onClick={e => e.stopPropagation()}>
+                            {headerExtra}
+                        </div>
+                    )}
+                </div>
+                <button onClick={handleToggle} className="flex items-center gap-1 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-colors flex-shrink-0 ml-3">
                     <span className="text-xs font-medium">{isOpen ? '收起' : '展开'}</span>
                     {isOpen ? <ChevronUpIcon className="w-5 h-5" /> : <ChevronDownIcon className="w-5 h-5" />}
-                </div>
-            </button>
+                </button>
+            </div>
             {isOpen && (
                 <div className="p-6 border-t border-slate-100 dark:border-slate-700 animate-in slide-in-from-top-2 duration-200">
                     {children}

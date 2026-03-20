@@ -314,7 +314,7 @@ const App: React.FC = () => {
         if (isMobile) setIsMobileNavOpen(false);
     };
 
-    const handleNavigateToConfirmation = async (data: EmployeeAttendanceRecord[], month: string, mainCompany: string) => {
+    const handleNavigateToConfirmation = async (data: EmployeeAttendanceRecord[], month: string, mainCompany: string, source: 'dashboard' | 'calendar' = 'dashboard', holidays: Record<string, { holiday: boolean; name?: string }> = {}) => {
         // 🔥 清除考勤确认页面相关的缓存，确保每次都重新拉取数据
         // console.log('[App] 清除考勤确认相关缓存，强制重新加载数据');
         
@@ -325,7 +325,7 @@ const App: React.FC = () => {
         
         // console.log('[App] 缓存清除完成，设置预加载数据并导航到考勤确认页面');
         
-        setAttendancePreloadData({ data, month, mainCompany });
+        setAttendancePreloadData({ data, month, mainCompany, source, holidays });
         setAttendanceManagementKey(prev => prev + 1);
         setPage('attendanceManagement');
     };
@@ -341,7 +341,7 @@ const App: React.FC = () => {
             case 'parameterSettings':
                 return user.permissions?.includes('admin:settings') ? <ParameterSettingsPage /> : <div>无权限访问</div>;
             case 'attendanceRules':
-                return user.permissions?.includes('admin:settings') ? <AttendanceRulesPage /> : <div>无权限访问</div>;
+                return user.permissions?.includes('admin:settings') ? <AttendanceRulesPage currentCompany={currentCompany} /> : <div>无权限访问</div>;
             case 'adminAccount':
                 return (user.permissions?.includes('admin:users') || user.permissions?.includes('admin:roles')) ? <AdminPage /> : <div>无权限访问</div>;
             case 'modelManagement':

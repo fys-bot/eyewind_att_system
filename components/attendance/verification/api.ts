@@ -30,7 +30,7 @@ export async function fetchToken(mainCompany: string) {
     const requestPromise = (async () => {
         try {
             // console.log(`[fetchToken] 开始获取token: ${mainCompany}`);
-            const response = await fetch("http://10.10.88.135:5001/etl/dingding/gettoken", {
+            const response = await fetch("http://localhost:5001/etl/dingding/gettoken", {
                 "method": "POST",
                 "headers": {
                     "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJ6ZDAyOWY3Y2VzcnQiLCJ0eXAiOiJhZG1pbiIsImlhdCI6MTc2MDk0MjU0MiwiZXhwIjoxNzYwOTQ5NzQyfQ.GmxvDMsuQ-l6k55tHnLlLBomYuNA4bV2o2z-hwLVaX8",
@@ -85,12 +85,13 @@ function getMockEmployees() {
 }
 
 // 🔥 改进的内存缓存，增加更强的重复调用保护
-const employeeCache = new Map<string, { data: any[], timestamp: number, promise?: Promise<any[]> }>();
+// 导出 employeeCache 以便其他模块可以清除缓存
+export const employeeCache = new Map<string, { data: any[], timestamp: number, promise?: Promise<any[]> }>();
 const CACHE_DURATION = 5 * 60 * 1000; // 5分钟缓存
 
 /** 2、获取所有员工id */
 export async function fetchAllEmployees(mainCompany: string): Promise<any[]> {
-    const userUrl = `http://10.10.88.135:5001/etl/dingding/employees`;
+    const userUrl = `http://localhost:5001/etl/dingding/employees`;
     
     // 🔥 检查缓存
     const cacheKey = `employees_${mainCompany}`;
@@ -341,7 +342,7 @@ export async function sendDingTalkNotifications(records: EmployeeAttendanceRecor
                 }
             }
         };
-        const corpMessagePromise = fetch("http://10.10.88.135:5001/etl/dingding/corp/send", {
+        const corpMessagePromise = fetch("http://localhost:5001/etl/dingding/corp/send", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(corpMessagePayload)
@@ -396,7 +397,7 @@ export async function sendDingTalkNotifications(records: EmployeeAttendanceRecor
             remindNotifyConfigs: { dingNotify: "1", sendTodoApn: true }
         };
 
-        const todoPromise = fetch("http://10.10.88.135:5001/etl/dingding/tudo/create", {
+        const todoPromise = fetch("http://localhost:5001/etl/dingding/tudo/create", {
             method: 'POST',
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(todoPayload)
@@ -465,7 +466,7 @@ export async function recallDingTalkNotifications(
                 operatorId: user.unionid // Defaulting operator to same user as per requirement
             };
             promises.push(
-                fetch("http://10.10.88.135:5001/etl/dingding/tudo/delete", {
+                fetch("http://localhost:5001/etl/dingding/tudo/delete", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(todoRecallPayload)
@@ -488,7 +489,7 @@ export async function recallDingTalkNotifications(
                 msg_task_id: record.corp_task_id
             };
             promises.push(
-                fetch("http://10.10.88.135:5001/etl/dingding/corp/recall", {
+                fetch("http://localhost:5001/etl/dingding/corp/recall", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(corpRecallPayload)

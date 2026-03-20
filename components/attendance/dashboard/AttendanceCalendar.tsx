@@ -18,6 +18,7 @@ import { analyzeCalendarPattern } from '../../../services/aiChatService.ts';
 import { getCachedAnalysis, setCachedAnalysis, getCalendarAnalysisCacheKey } from '../../../services/aiCacheService.ts';
 import { MarkdownRenderer } from './MarkdownRenderer.tsx';
 import { useAttendanceRuleConfig } from '../../../hooks/useAttendanceRuleConfig.ts';
+import { saveReportSnapshot, getLatestSnapshot } from '../../../services/reportSnapshotApiService.ts';
 
 const LEAVE_TYPE_STYLES: Record<string, string> = {
     '年假': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800',
@@ -898,15 +899,30 @@ export const AttendanceCalendarView: React.FC<{
     const [filterStatus, setFilterStatus] = useState('all');
     const [highlightedEmployee, setHighlightedEmployee] = useState<string | null>(null); // 高亮的员工ID
 
-    // 🔥 获取考勤规则配置（用于读取带薪福利假配置）
+    // 🔥 获取考勤规则配置（用于读取法定调班规则的自定义假期）
     const { config: ruleConfig } = useAttendanceRuleConfig(currentCompany);
     const customHolidayDates = useMemo(() => {
         const dateMap = new Map<string, string>(); // 存储日期 -> 原因的映射
         const customDays = ruleConfig?.rules?.workdaySwapRules?.customDays || [];
         
         customDays.forEach(day => {
-            if (day.type === 'holiday' && day.reason?.includes('福利假')) {
+            // 🔥 显示所有 type === 'holiday' 的自定义日期（包括带薪福利假、春节补班等）
+            if (day.type === 'holiday') {
                 dateMap.set(day.date, day.reason); // 存储日期和原因
+            }
+        });
+        
+        return dateMap;
+    }, [ruleConfig, currentCompany]);
+
+    // 🔥 获取法定补班日（type === 'workday' 的自定义日期）
+    const customWorkdayDates = useMemo(() => {
+        const dateMap = new Map<string, string>();
+        const customDays = ruleConfig?.rules?.workdaySwapRules?.customDays || [];
+        
+        customDays.forEach(day => {
+            if (day.type === 'workday') {
+                dateMap.set(day.date, day.reason);
             }
         });
         
@@ -942,6 +958,35 @@ export const AttendanceCalendarView: React.FC<{
 
     const snapshotRef = useRef<AttendanceMap | null>(null);
 
+    const [isSavingSnapshot, setIsSavingSnapshot] = useState(false);
+
+    // 🔥 快照版本信息（支持多公司）
+    const [calendarSnapshotInfo, setCalendarSnapshotInfo] = useState<Record<string, { version: number; savedAt: string; savedByName: string }>>({});
+
+    // 🔥 快照行数据（用于覆盖日历显示）：companyId -> { headers, rows }
+    const [calendarSnapshotData, setCalendarSnapshotData] = useState<Record<string, { headers: string[]; rows: string[][] }>>({});
+
+    // 🔥 公司名到 companyId 的映射
+    const resolveCompanyId = (company: string): string => {
+        if (company === 'eyewind' || company.includes('风眼')) return 'eyewind';
+        if (company === 'hydodo' || company.includes('海多多')) return 'hydodo';
+        if (company.includes('脑力')) return 'naoli';
+        if (company.includes('海科')) return 'haike';
+        if (company.includes('浅冰')) return 'qianbing';
+        return company;
+    };
+    const resolveCompanyDisplayName = (companyId: string): string => {
+        if (companyId === 'eyewind') return '深圳市风眼科技有限公司';
+        if (companyId === 'hydodo') return '深圳市海多多科技有限公司';
+        if (companyId === 'naoli') return '深圳市脑力科技有限公司';
+        if (companyId === 'haike') return '深圳市海科科技有限公司';
+        if (companyId === 'qianbing') return '深圳市浅冰科技有限公司';
+        return companyId;
+    };
+
+    // 🔥 判断是否为"全部"模式（包含多个公司）
+    const isAllCompanyMode = companyName === '全部';
+
     // Calculate hasChanges to enable/disable Save button
     // Comparing large objects might be heavy, but necessary for the feature.
     // Memoizing based on attendanceMap and isEditing.
@@ -958,6 +1003,86 @@ export const AttendanceCalendarView: React.FC<{
     // Calculate stats internally to support download with current (edited) data
     const statsData = useAttendanceStats(users, attendanceMap, processDataMap, holidays, year, monthIndex);
     const { companyEmployeeStats } = statsData;
+
+    // 🔥 获取当前日历中涉及的所有公司ID列表
+    const companyIdList = useMemo(() => {
+        const companyKeys = Object.keys(companyEmployeeStats);
+        if (companyKeys.length === 0) {
+            // 兜底：用 currentCompany
+            return [resolveCompanyId(currentCompany)];
+        }
+        // 过滤掉 Unknown/未知
+        return companyKeys
+            .filter(k => k && k !== 'Unknown' && k !== 'unknown' && k !== '未知')
+            .map(k => resolveCompanyId(k));
+    }, [companyEmployeeStats, currentCompany]);
+
+    // 🔥 进入考勤日历时加载所有公司的最新迟到表快照信息
+    useEffect(() => {
+        const loadSnapshots = async () => {
+            const info: Record<string, { version: number; savedAt: string; savedByName: string }> = {};
+            const data: Record<string, { headers: string[]; rows: string[][] }> = {};
+            await Promise.all(companyIdList.map(async (cid) => {
+                try {
+                    const snapshot = await getLatestSnapshot(cid, month, 'late');
+                    if (snapshot) {
+                        info[cid] = {
+                            version: snapshot.version,
+                            savedAt: snapshot.created_at,
+                            savedByName: snapshot.saved_by_name || '未知',
+                        };
+                        // 🔥 保存快照行数据，用于覆盖日历显示
+                        const headers = typeof snapshot.headers === 'string' ? JSON.parse(snapshot.headers) : snapshot.headers;
+                        const rows = typeof snapshot.rows === 'string' ? JSON.parse(snapshot.rows) : snapshot.rows;
+                        if (headers && rows) {
+                            data[cid] = { headers, rows };
+                        }
+                    }
+                } catch { /* 静默 */ }
+            }));
+            setCalendarSnapshotInfo(info);
+            setCalendarSnapshotData(data);
+        };
+        if (companyIdList.length > 0) loadSnapshots();
+    }, [companyIdList.join(','), month]);
+
+    // 🔥 从快照数据构建员工每日状态查找表：employeeName -> { day -> statusString }
+    const snapshotStatusMap = useMemo(() => {
+        const map: Record<string, Record<number, string>> = {};
+        for (const [_cid, snapData] of Object.entries(calendarSnapshotData) as [string, { headers: string[]; rows: string[][] }][]) {
+            if (!snapData.rows?.length) continue;
+            // 快照行格式: [序号, 姓名, day1, day2, ..., dayN, ...其他统计列]
+            // headers 格式: [序号, 姓名, 1, 2, 3, ..., N, 豁免后迟到分钟数, ...]
+            // 找到日期列的起始和结束索引
+            const headers = snapData.headers;
+            const dayStartIdx = 2; // 跳过序号和姓名
+            for (const row of snapData.rows) {
+                const name = row[1]; // 姓名
+                if (!name) continue;
+                if (!map[name]) map[name] = {};
+                for (let i = dayStartIdx; i < row.length && i < headers.length; i++) {
+                    const headerVal = headers[i];
+                    const dayNum = parseInt(headerVal);
+                    if (!isNaN(dayNum) && dayNum >= 1 && dayNum <= 31) {
+                        const cellValue = row[i];
+                        if (cellValue && cellValue !== '') {
+                            map[name][dayNum] = cellValue;
+                        }
+                    }
+                }
+            }
+        }
+        return map;
+    }, [calendarSnapshotData]);
+
+    // 🔥 "全部"模式下显示实际公司名称
+    const calendarDisplayName = useMemo(() => {
+        if (!isAllCompanyMode) return companyName;
+        const names = Object.keys(companyEmployeeStats || {})
+            .filter(k => k && k !== 'Unknown' && k !== 'unknown' && k !== '未知')
+            .map(k => resolveCompanyDisplayName(resolveCompanyId(k)).replace(/深圳市|科技有限公司/g, ''));
+        return names.length > 0 ? names.join('+') : '全部';
+    }, [isAllCompanyMode, companyName, companyEmployeeStats]);
 
     // 检查数据是否正在加载
     const isDataLoading = useMemo(() => {
@@ -1163,6 +1288,67 @@ export const AttendanceCalendarView: React.FC<{
                     alert('❌ 保存完全失败，请检查网络连接后重试');
                 }
             }
+        }
+    };
+
+    // 🔥 保存考勤日历数据（迟到统计表）到数据库
+    const handleSaveCalendarSnapshot = async () => {
+        setIsSavingSnapshot(true);
+        try {
+            const headers = ['序号', '姓名', '部门', '迟到次数', '迟到总分钟', '缺卡次数', '旷工次数'];
+            const results: string[] = [];
+            const newInfo: Record<string, { version: number; savedAt: string; savedByName: string }> = { ...calendarSnapshotInfo };
+
+            // 按公司分别保存
+            for (const [companyKey, employees] of Object.entries(companyEmployeeStats)) {
+                if (!companyKey || companyKey === 'Unknown' || companyKey === 'unknown' || companyKey === '未知') continue;
+                const cid = resolveCompanyId(companyKey);
+                const displayName = resolveCompanyDisplayName(cid);
+                const statsArr = employees as any[];
+
+                const rows = statsArr.map((item: any, idx: number) => {
+                    const s = item.stats as EmployeeStats;
+                    return [
+                        String(idx + 1),
+                        item.user.name || '',
+                        item.user.department || '',
+                        String(s.late || 0),
+                        String(s.lateMinutes || 0),
+                        String(s.missing || 0),
+                        String(s.absenteeism || 0),
+                    ];
+                });
+
+                let redFrameCount = 0;
+                statsArr.forEach((item: any) => {
+                    const s = item.stats as EmployeeStats;
+                    redFrameCount += (s.missing || 0) + (s.absenteeism || 0);
+                });
+
+                const result = await saveReportSnapshot({
+                    companyId: cid,
+                    companyDisplayName: displayName,
+                    yearMonth: month,
+                    reportType: 'late',
+                    tabName: `${displayName}-迟到统计表`,
+                    headers,
+                    rows,
+                    redFrameCount,
+                    editCount: 0,
+                    editLogs: [],
+                });
+
+                results.push(`${displayName} v${result.version}`);
+                newInfo[cid] = { version: result.version, savedAt: new Date().toISOString(), savedByName: '当前用户' };
+            }
+
+            setCalendarSnapshotInfo(newInfo);
+            alert(`保存成功：${results.join('、')}`);
+        } catch (err: any) {
+            console.error('[考勤日历保存快照] 失败:', err);
+            alert('保存失败: ' + (err.message || '未知错误'));
+        } finally {
+            setIsSavingSnapshot(false);
         }
     };
 
@@ -1409,7 +1595,7 @@ export const AttendanceCalendarView: React.FC<{
                              '正在准备日历数据...'}
                         </p>
                         <div className="mt-4 text-xs text-slate-500 dark:text-slate-400">
-                            公司: {companyName} | 月份: {month}
+                            公司: {calendarDisplayName} | 月份: {month}
                         </div>
                     </div>
                 </div>
@@ -1424,9 +1610,22 @@ export const AttendanceCalendarView: React.FC<{
                     <ArrowLeftIcon className="w-4 h-4" />
                     返回仪表盘
                 </button>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap items-center">
+                    {Object.keys(calendarSnapshotInfo).length > 0 && (Object.entries(calendarSnapshotInfo) as [string, { version: number; savedAt: string; savedByName: string }][]).map(([cid, info]) => (
+                        <span key={cid} className="flex items-center text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-2 py-1.5 rounded-md">
+                            {resolveCompanyDisplayName(cid).replace(/深圳市|科技有限公司/g, '')} v{info.version} · {info.savedByName} · {new Date(info.savedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                    ))}
                     {!isEditing && (
                         <>
+                            <button
+                                onClick={handleSaveCalendarSnapshot}
+                                disabled={isSavingSnapshot}
+                                className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-md hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm flex items-center gap-1.5"
+                            >
+                                {isSavingSnapshot ? <Loader2Icon className="w-3.5 h-3.5 animate-spin" /> : <SaveIcon className="w-3.5 h-3.5" />}
+                                {isSavingSnapshot ? '保存中...' : '保存入库'}
+                            </button>
                             <button onClick={onConfirm} className="px-3 py-1.5 text-sm bg-sky-600 text-white rounded-md hover:bg-sky-500 transition-colors shadow-sm">
                                 生成确认单
                             </button>
@@ -1868,7 +2067,19 @@ export const AttendanceCalendarView: React.FC<{
                                             lookbackCheckoutFinder
                                         ) : 0;
 
-                                        let isMissing = statusData?.status === 'incomplete' || statusData?.records.some(r => r.timeResult === 'NotSigned');
+                                        let isMissing = (() => {
+                                            if (!statusData?.records?.length) return false;
+                                            // 🔥 修复：与 useAttendanceStats 保持一致的缺卡判断逻辑
+                                            // 只有存在 NotSigned 记录且没有对应的正常打卡记录时才算缺卡
+                                            const hasOnDutyNotSigned = statusData.records.some(r => r.checkType === 'OnDuty' && r.timeResult === 'NotSigned' && new Date(r.baseCheckTime).getHours() <= 10);
+                                            const hasOffDutyNotSigned = statusData.records.some(r => r.checkType === 'OffDuty' && r.timeResult === 'NotSigned');
+                                            // 🔥 如果同时有正常打卡记录，则覆盖 NotSigned，不算缺卡
+                                            const hasValidOnDuty = statusData.records.some(r => r.checkType === 'OnDuty' && r.timeResult !== 'NotSigned');
+                                            const hasValidOffDuty = statusData.records.some(r => r.checkType === 'OffDuty' && r.timeResult !== 'NotSigned');
+                                            const onMissing = hasOnDutyNotSigned && !hasValidOnDuty;
+                                            const offMissing = hasOffDutyNotSigned && !hasValidOffDuty;
+                                            return onMissing || offMissing;
+                                        })();
 
                                         const dailyLeaveHours = statusData ? calculateDailyLeaveDuration(statusData.records, processDataMap, year, dateKey, user.mainCompany) : 0;
                                         const isFullDayLeaveCombined = dailyLeaveHours >= (user.mainCompany?.includes('成都') ? 8.5 : 8);
@@ -1905,9 +2116,34 @@ export const AttendanceCalendarView: React.FC<{
                                         const isToday = (monthIndex === today.getMonth() && year === today.getFullYear()) && day === today.getDate();
                                         if (isToday) isMissing = false;
 
+                                        // 🔥 快照数据覆盖：如果有已保存的快照数据，以快照为准（优先级最高）
+                                        const snapshotDayStatus = snapshotStatusMap[user.name]?.[day];
+                                        let snapshotOverrideLateMinutes: number | null = null;
+                                        if (snapshotDayStatus) {
+                                            if (snapshotDayStatus === '√' || snapshotDayStatus === '-') {
+                                                // 快照标记为正常或非工作日，清除缺卡和迟到
+                                                isMissing = false;
+                                                snapshotOverrideLateMinutes = 0;
+                                            } else if (snapshotDayStatus.startsWith('迟到')) {
+                                                // 快照标记为迟到，清除缺卡，使用快照的迟到分钟数
+                                                isMissing = false;
+                                                const m = snapshotDayStatus.match(/迟到(\d+)/);
+                                                snapshotOverrideLateMinutes = m ? parseInt(m[1]) : null;
+                                            } else if (snapshotDayStatus.includes('缺卡') || snapshotDayStatus === '旷工') {
+                                                // 快照标记为缺卡/旷工，保持缺卡状态
+                                                isMissing = true;
+                                            } else if (snapshotDayStatus.includes('假') || snapshotDayStatus.includes('调休') || snapshotDayStatus.includes('外出')) {
+                                                // 快照标记为请假类，清除缺卡
+                                                isMissing = false;
+                                                snapshotOverrideLateMinutes = 0;
+                                            }
+                                        }
+                                        // 🔥 使用快照覆盖后的迟到分钟数
+                                        const effectiveLateMinutes = snapshotOverrideLateMinutes !== null ? snapshotOverrideLateMinutes : lateMinutes;
+
                                         const isOvertime = !isWorkday && statusData && statusData.records.length > 0 && !leaveType;
 
-                                        const isNormal = !isMissing && !lateMinutes && !isOvertime && statusData;
+                                        const isNormal = !isMissing && !effectiveLateMinutes && !isOvertime && statusData;
 
                                         // 🔥 检查是否为带薪福利假（使用完整日期格式）
                                         const benefitHolidayReason = customHolidayDates.get(fullDateKey);
@@ -1929,7 +2165,7 @@ export const AttendanceCalendarView: React.FC<{
                                                 const type = p?.formValues?.leaveType || p?.bizType;
                                                 if (type) badges.push({ text: type, className: LEAVE_TYPE_STYLES[type] || LEAVE_TYPE_STYLES.default });
                                             }
-                                        } else if (!isMissing && !isNormal && !lateMinutes && !isOvertime && statusData) {
+                                        } else if (!isMissing && !isNormal && !effectiveLateMinutes && !isOvertime && statusData) {
                                             const leaveRec = statusData.records.find(r => r.procInstId && processDataMap[r.procInstId]);
                                             if (leaveRec) {
                                                 const p = processDataMap[leaveRec.procInstId];
@@ -1938,7 +2174,7 @@ export const AttendanceCalendarView: React.FC<{
                                             }
                                         }
 
-                                        if (lateMinutes > 0) badges.push({ text: `迟到${lateMinutes}分`, className: LEAVE_TYPE_STYLES['迟到'] });
+                                        if (effectiveLateMinutes > 0) badges.push({ text: `迟到${effectiveLateMinutes}分`, className: LEAVE_TYPE_STYLES['迟到'] });
 
                                         const todayDay = (monthIndex === today.getMonth() && year === today.getFullYear()) ? today.getDate() : -1;
 
@@ -1956,10 +2192,16 @@ export const AttendanceCalendarView: React.FC<{
                                         }
                                         if (isOvertime) badges.push({ text: '加班', className: LEAVE_TYPE_STYLES['加班'] });
                                         if ((isNormal || (isFullDayLeaveCombined && !leaveType)) && !showDetails && badges.length === 0) {
-                                            badges.push({ text: '√', className: 'text-green-600 font-bold text-lg border-none bg-transparent' });
+                                            // 🔥 检查是否为法定补班日
+                                            const workdayReason = customWorkdayDates.get(fullDateKey);
+                                            if (workdayReason) {
+                                                badges.push({ text: workdayReason, className: 'text-orange-700 bg-orange-50 border-orange-200' });
+                                            } else {
+                                                badges.push({ text: '√', className: 'text-green-600 font-bold text-lg border-none bg-transparent' });
+                                            }
                                         }
 
-                                        let bgClass = statusData ? cellClasses[statusData.status] : cellClasses['noRecord'];
+                                        let bgClass = statusData ? (isMissing ? cellClasses['incomplete'] : cellClasses[statusData.status] || cellClasses['normal']) : cellClasses['noRecord'];
                                         if (isNormal || isFullDayLeaveCombined) {
                                             bgClass = 'bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50';
                                         }
@@ -1973,7 +2215,7 @@ export const AttendanceCalendarView: React.FC<{
                                         const showApproveIcon = statusData?.hasOffDutyApprove || statusData?.hasOnDutyApprove;
                                         const showIcon = showAbnormalIcon || showApproveIcon;
 
-                                        if (lateMinutes > 0) {
+                                        if (effectiveLateMinutes > 0) {
                                             bgClass = 'bg-yellow-50 dark:bg-yellow-900/30 hover:bg-yellow-100 dark:hover:bg-yellow-900/50';
                                         }
 

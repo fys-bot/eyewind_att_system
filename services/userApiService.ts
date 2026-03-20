@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://10.10.88.135:5001/api/v1';
+const API_BASE_URL = 'http://localhost:5001/api/v1';
 
 export interface User {
   id: string;

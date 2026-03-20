@@ -632,7 +632,7 @@ export const AttendanceDetailView: React.FC<{
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-700 bg-white dark:bg-slate-800">
                             {sortedRecords.map(record => {
                                 const dingTalkUser = dingTalkUsers.find(u => u.name === record.employeeName);
-                                const hasResigned = !record.department;
+                                const hasResigned = !record.dailyData.department && !record.department;
                                 return (
                                     <tr 
                                         key={record.id} 
@@ -656,7 +656,7 @@ export const AttendanceDetailView: React.FC<{
                                                 <span className={`font-semibold text-slate-900 dark:text-white ${hasResigned ? 'line-through decoration-slate-400' : ''}`}>{record.employeeName}</span>
                                             </div>
                                         </td>
-                                        <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{hasResigned ? <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-xs">已离职</span> : (dingTalkUser?.department || record.department)}</td>
+                                        <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{hasResigned ? <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-700 rounded text-xs">已离职</span> : (dingTalkUser?.department || record.department || record.dailyData.department)}</td>
                                         
                                         <td className="py-3 w-[110px]">
                                             <div className="flex justify-center">

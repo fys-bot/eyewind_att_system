@@ -3,6 +3,7 @@ import { attendanceService } from '../services/attendanceService';
 import { auditLogService } from '../services/auditLogService';
 import type { CompanyId, ApiResponse } from '../types/index';
 import type { EditLogQuery } from '../types/attendance';
+import { logApiRequest, logDbQuery, logApiResponse, logError, getDataStructure } from '../utils/logger';
 
 const router = Router();
 
@@ -13,10 +14,14 @@ const validateCompanyId = (companyId: string): companyId is CompanyId => {
 
 // GET /api/v1/logs/attendance/:companyId - 获取考勤编辑日志
 router.get('/attendance/:companyId', async (req: Request, res: Response) => {
+  const startTime = Date.now();
   try {
     const { companyId } = req.params;
     
+    logApiRequest('/api/v1/logs/attendance/:companyId', 'GET', { companyId }, req.query);
+    
     if (!validateCompanyId(companyId)) {
+      logError('无效的公司ID', new Error('Invalid companyId'), { companyId });
       return res.status(400).json({
         code: 40002,
         message: '无效的公司ID',
@@ -33,13 +38,18 @@ router.get('/attendance/:companyId', async (req: Request, res: Response) => {
     };
     
     const data = await attendanceService.getEditLogs(companyId, query);
+    const duration = Date.now() - startTime;
+    
+    logDbQuery('getEditLogs', data.list?.length || 0, `total=${data.total}, page=${query.page}`, duration);
+    logApiResponse('/api/v1/logs/attendance', 200, data.list?.length || 0, duration);
     
     res.json({
       code: 0,
       data,
     } as ApiResponse);
   } catch (error: any) {
-    console.error('获取考勤编辑日志失败:', error);
+    const duration = Date.now() - startTime;
+    logError('获取考勤编辑日志失败', error, { duration });
     res.status(500).json({
       code: 50002,
       message: error.message || '数据库操作失败',
@@ -49,10 +59,14 @@ router.get('/attendance/:companyId', async (req: Request, res: Response) => {
 
 // GET /api/v1/logs/audit - 获取系统审计日志
 router.get('/audit/:companyId', async (req: Request, res: Response) => {
+  const startTime = Date.now();
   try {
     const { companyId } = req.params;
     
+    logApiRequest('/api/v1/logs/audit/:companyId', 'GET', { companyId }, req.query);
+    
     if (!validateCompanyId(companyId)) {
+      logError('无效的公司ID', new Error('Invalid companyId'), { companyId });
       return res.status(400).json({
         code: 40002,
         message: '无效的公司ID',
@@ -73,13 +87,18 @@ router.get('/audit/:companyId', async (req: Request, res: Response) => {
     };
     
     const data = await auditLogService.query(companyId, query);
+    const duration = Date.now() - startTime;
+    
+    logDbQuery('queryAuditLogs', data.list?.length || 0, `total=${data.total}, page=${query.page}`, duration);
+    logApiResponse('/api/v1/logs/audit', 200, data.list?.length || 0, duration);
     
     res.json({
       code: 0,
       data,
     } as ApiResponse);
   } catch (error: any) {
-    console.error('获取审计日志失败:', error);
+    const duration = Date.now() - startTime;
+    logError('获取审计日志失败', error, { duration });
     res.status(500).json({
       code: 50002,
       message: error.message || '数据库操作失败',
@@ -89,10 +108,14 @@ router.get('/audit/:companyId', async (req: Request, res: Response) => {
 
 // GET /api/v1/logs/unified/:companyId - 获取统一日志（考勤+审计）
 router.get('/unified/:companyId', async (req: Request, res: Response) => {
+  const startTime = Date.now();
   try {
     const { companyId } = req.params;
     
+    logApiRequest('/api/v1/logs/unified/:companyId', 'GET', { companyId }, req.query);
+    
     if (!validateCompanyId(companyId)) {
+      logError('无效的公司ID', new Error('Invalid companyId'), { companyId });
       return res.status(400).json({
         code: 40002,
         message: '无效的公司ID',
@@ -116,6 +139,8 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
     };
     
     const unifiedLogs: any[] = [];
+    let attendanceCount = 0;
+    let auditCount = 0;
     
     // 获取考勤编辑日志
     if (query.logType === 'attendance' || query.logType === 'all') {
@@ -129,6 +154,7 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
           editType: query.editType,
         });
         
+        attendanceCount = attendanceLogs.list.length;
         // 转换为统一格式
         const convertedLogs = attendanceLogs.list.map((log: any) => ({
           id: `att_${log.id}`,
@@ -138,7 +164,7 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
           userName: log.user_name || undefined,
           action: log.edit_type,
           target: `考勤数据 - ${log.user_name || log.user_id}`,
-          details: log.edit_reason || `修改了 ${new Date(log.attendance_date).toLocaleDateString('zh-CN')} 的考勤数据`,
+          details: `修改了 ${new Date(log.attendance_date).toLocaleDateString('zh-CN')} 的考勤数据`,
           attendanceDate: log.attendance_date,
           editType: log.edit_type,
           oldStatus: log.old_status || undefined,
@@ -153,7 +179,7 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
         
         unifiedLogs.push(...convertedLogs);
       } catch (err) {
-        console.warn('获取考勤日志失败:', err);
+        logError('获取考勤日志失败', err);
       }
     }
     
@@ -170,6 +196,7 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
           action: query.action,
         });
         
+        auditCount = auditLogs.list.length;
         // 转换为统一格式
         const convertedLogs = auditLogs.list.map((log: any) => ({
           id: `audit_${log.id}`,
@@ -232,6 +259,10 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
     const endIndex = startIndex + (query.size || 20);
     const paginatedLogs = filteredLogs.slice(startIndex, endIndex);
     
+    const duration = Date.now() - startTime;
+    logDbQuery('getUnifiedLogs', paginatedLogs.length, `考勤:${attendanceCount}, 审计:${auditCount}, 合并后:${total}`, duration);
+    logApiResponse('/api/v1/logs/unified', 200, paginatedLogs.length, duration);
+    
     const data = {
       total,
       list: paginatedLogs,
@@ -244,7 +275,8 @@ router.get('/unified/:companyId', async (req: Request, res: Response) => {
       data,
     } as ApiResponse);
   } catch (error: any) {
-    console.error('获取统一日志失败:', error);
+    const duration = Date.now() - startTime;
+    logError('获取统一日志失败', error, { duration });
     res.status(500).json({
       code: 50002,
       message: error.message || '数据库操作失败',
